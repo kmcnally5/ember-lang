@@ -1,0 +1,7 @@
+p1=(Ada Lovelace, 36)  cost(p2)=99
+p1 still live after binding: 36, alias 36
+array len=3 total_age=171
+holder=(Ada, age 99, tag 7)
+arena=Ada, age 36
+sumA=41 sumB=52
+=> 171

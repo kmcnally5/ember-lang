@@ -152,6 +152,22 @@ a fight), the language provides in-tree reference-counting and arena/region tool
 sanctioned answer instead of escalating the borrow-checker battle. This is the concrete
 mechanism behind §3.1.
 
+> **Shipped (June 2026) — the two blessed tools.** The "arena/region" tool is **`std/slotmap`**
+> (`SlotMap<V>` + generational `Handle`): the store owns the values, callers hold copyable
+> handles, and a stale handle reads back as a safe `None` rather than a dangling value — separating
+> *identity* from *ownership*, which is how the best graph-shaped systems code is already written
+> (ECS component arrays, generational arenas). The "reference-counting" tool is the **`rc struct`**:
+> a user struct may opt into the shared, reference-counted, **deeply-immutable** class that strings
+> and enums already occupy. One honest framing correction worth stating plainly: `rc struct` does
+> **not** preserve "single ownership" — it deliberately introduces a *shared* type. What it
+> preserves is the load-bearing invariant **`shared ⇒ immutable`** (and therefore refcount
+> completeness / no reference cycles). Soundness rests on two pillars: (a) **deep immutability** —
+> every field is itself immutably shareable, and no path may mutate *through* an `rc` value; and
+> (b) **eager, bottom-up construction** — no instance can be made to point at one created later, so
+> a back-edge is unconstructable. We adopt the *safe* half of `Rc` (shared immutable data) and
+> deliberately **refuse** the dangerous half — `Rc<RefCell>`/`Cell`/shared *mutable* state — which
+> is what would reopen leaks and data races and turn the crown jewel into a footgun.
+
 ### ✅ Concurrency primitive — *decided June 2026*
 **Structured concurrency via `nursery`-style blocks.** Concurrent tasks are scoped to a block
 and cannot outlive it; the parent does not proceed until its children complete or are

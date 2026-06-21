@@ -1625,6 +1625,7 @@ static Decl *parse_struct(Parser *p) {
     d->line = cur(p)->line;
     d->col  = cur(p)->col;
     d->doc  = tok_doc(p, cur(p));
+    d->as.struct_.is_rc = 0;   // arena nodes are not zeroed; the `rc` modifier (parse_decl) sets it
     adv(p); // 'struct'
     const Token *name = expect(p, TOK_IDENT, "expected struct name");
     d->as.struct_.name     = tok_text(p, name);
@@ -1845,6 +1846,19 @@ static Decl *parse_global_let(Parser *p, int is_var) {
 
 
 static Decl *parse_decl(Parser *p) {
+    // `rc` is a CONTEXTUAL modifier, not a reserved word — so `rc` stays a valid identifier
+    // everywhere else (e.g. `var rc = 0`). It is special only immediately before `struct`:
+    // `rc struct Name { ... }` declares a shared, deeply-immutable, refcounted struct.
+    if (pk(p) == TOK_IDENT &&
+        p->pos + 1 < p->count && p->toks[p->pos + 1].type == TOK_STRUCT &&
+        strcmp(tok_text(p, cur(p)), "rc") == 0) {
+        adv(p);                         // consume the `rc` modifier
+        Decl *d = parse_struct(p);
+        if (d != NULL) {
+            d->as.struct_.is_rc = 1;
+        }
+        return d;
+    }
     switch (pk(p)) {
         case TOK_FN: {
             Decl *d = arena_alloc(p->arena, sizeof(Decl));

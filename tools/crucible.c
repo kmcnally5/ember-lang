@@ -39,6 +39,13 @@ static int g_shape;
 static int has_string(void) { return g_shape == 1 || g_shape == 3; }
 static int has_nested(void) { return g_shape == 2 || g_shape == 3; }
 
+// rc mode (seed >= CRUCIBLE_RC_BASE): S (and Inner, if nested) is declared `rc struct`, so the SAME
+// aggregate operations route through the rc representation — boxed + refcounted, own_into_slot RETAINs
+// (no deep-clone), drop_value reclaims at the last owner. Only rc-SAFE ops run (no field mutation,
+// no .clone()), since an rc value is immutable. Catches rc representation drift / double-free / leak.
+#define CRUCIBLE_RC_BASE 1000000ULL
+static int g_rc;
+
 // Loop trip count, scalable so the driver can compare RSS at two sizes (leak oracle).
 static long g_loops;
 
@@ -200,11 +207,21 @@ static OpFn OPS[] = {
 };
 static const int N_OPS = (int)(sizeof(OPS) / sizeof(OPS[0]));
 
+// The rc-SAFE subset: ops that never mutate an S field or call .clone() (both illegal on an
+// immutable rc value), so an `rc struct` S compiles. They still share S into [T] / Map / Option /
+// nested aggregates, move it through a generic, churn it in a loop (leak soak), and move it out of an
+// array — exercising own_into_slot RETAIN, the refcounted drop, and VM↔native parity for rc.
+static OpFn RC_OPS[] = {
+    op_array_generic, op_map_struct, op_generic_move, op_option,
+    op_nested_map_array, op_array_loop, op_array_remove_at, op_array_remove_last,
+};
+static const int N_RC_OPS = (int)(sizeof(RC_OPS) / sizeof(RC_OPS[0]));
+
 // Which helpers an op needs (so they're declared before use).
-static void note_helpers(int op) {
-    if (OPS[op] == op_array_generic || OPS[op] == op_array_loop)   g_need_pair = 1;
-    if (OPS[op] == op_generic_move)                                g_need_keep = 1;
-    if (OPS[op] == op_option || OPS[op] == op_match_bind_out)      g_need_some = 1;
+static void note_helpers(OpFn fn) {
+    if (fn == op_array_generic || fn == op_array_loop)   g_need_pair = 1;
+    if (fn == op_generic_move)                           g_need_keep = 1;
+    if (fn == op_option || fn == op_match_bind_out)      g_need_some = 1;
 }
 
 
@@ -212,17 +229,21 @@ int main(int argc, char **argv) {
     uint64_t seed = (argc > 1) ? strtoull(argv[1], NULL, 10) : 1;
     g_loops = (argc > 2) ? strtol(argv[2], NULL, 10) : 30;     // driver scales this for the leak oracle
     g_rng = seed ? seed : 0x9E3779B97F4A7C15ULL;
+    g_rc  = (seed >= CRUCIBLE_RC_BASE);                        // high seed range => rc-struct mode
     g_shape = rnd(4);
+
+    OpFn      *tbl   = g_rc ? RC_OPS : OPS;                    // rc mode uses only the rc-safe ops
+    const int  n_tbl = g_rc ? N_RC_OPS : N_OPS;
 
     int n_ops = 2 + rnd(6);                                    // 2..7 ops
     int ops[8];
-    for (int i = 0; i < n_ops; i++) { ops[i] = rnd(N_OPS); note_helpers(ops[i]); }
+    for (int i = 0; i < n_ops; i++) { ops[i] = rnd(n_tbl); note_helpers(tbl[ops[i]]); }
 
-    printf("// crucible seed=%llu shape=%d ops=%d loops=%ld — generated; do not edit.\n",
-           (unsigned long long)seed, g_shape, n_ops, g_loops);
+    printf("// crucible seed=%llu shape=%d rc=%d ops=%d loops=%ld — generated; do not edit.\n",
+           (unsigned long long)seed, g_shape, g_rc, n_ops, g_loops);
     printf("import \"std/map\" as map\n\n");
-    if (has_nested()) printf("struct Inner { x: int }\n\n");
-    printf("struct S {\n    a: int\n");
+    if (has_nested()) printf("%sstruct Inner { x: int }\n\n", g_rc ? "rc " : "");
+    printf("%sstruct S {\n    a: int\n", g_rc ? "rc " : "");
     if (has_string()) printf("    s: string\n");
     if (has_nested()) printf("    inner: Inner\n");
     printf("}\n\n");
@@ -233,7 +254,7 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < n_ops; i++) {
         printf("fn op%d() -> int {\n    var acc = 0\n", i);
-        OPS[ops[i]]();
+        tbl[ops[i]]();
         printf("    return acc\n}\n\n");
     }
 

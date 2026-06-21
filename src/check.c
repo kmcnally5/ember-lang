@@ -314,6 +314,7 @@ typedef struct {
     int         implements[MAX_IMPLEMENTS]; // interface ids this struct implements
     int         implements_count;
     int         module;                     // owning module index (for name scoping)
+    int         is_rc;                      // `rc struct`: a shared, deeply-immutable refcounted type
     int         def_line;                   // the struct's source position, for LSP go-to-def
     int         def_col;
 } StructInfo;
@@ -433,6 +434,9 @@ typedef struct {
     // leak scans skip such code: reporting "this Ptr leaks" on a dead trailing `return 0` is a false
     // positive. Set after a diverging statement in each statement sequence; saved/restored per scope.
     int         unreachable;
+    int         any_rc;           // 1 if the program declares any `rc struct` — gates the rc-specific
+                                  // mutation guards so non-rc code (the whole existing corpus) is
+                                  // entirely unaffected (no extra path-walks, no duplicate diagnostics)
     int         nursery_depth;    // >0 = inside a nursery (spawn legal)
     const ModuleSet *modules;     // module boundaries + import aliases
     int         current_module;   // module index of the declaration being checked
@@ -514,6 +518,10 @@ static int is_copy_param(Checker *c, SemType t) {
 
 
 static int is_move_type(Checker *c, SemType t) {
+    if (is_struct_type(t) && c->structs[t].is_rc) {
+        return 0;   // R1: an `rc struct` is a shared, refcounted shareable — NOT a unique-owner
+                    // move type. It takes the incref/alias path in consume(), like a string/enum.
+    }
     if (is_struct_type(t) || is_array_type(t)) {
         return 1;   // structs and arrays are mutable, uniquely-owned aggregates
     }
@@ -558,7 +566,26 @@ static int is_refcounted(Checker *c, SemType t) {
     if (t == TY_STRING || is_enum_type(t) || is_fn_type(t) || is_channel_type(t)) {
         return 1;   // closures + channels are heap objects, shared by reference count
     }
+    if (is_struct_type(t) && c->structs[t].is_rc) {
+        return 1;   // R1: an `rc struct` is the fifth shared-immutable shareable, reference-counted
+    }
     return is_generic_inst(t) && c->ginsts[t - GENERIC_BASE].is_enum;
+}
+
+
+// type_is_rc reports whether `t` is an `rc struct` — a shared, deeply-immutable, refcounted struct.
+// Used by the mutation gates (a write THROUGH an rc value is illegal) and the layout predicates.
+static int type_is_rc(Checker *c, SemType t) {
+    if (is_struct_type(t)) {
+        return c->structs[t].is_rc;
+    }
+    if (is_generic_inst(t)) {
+        // Defensive: R7 currently bans a generic `rc struct`, so a generic instance's base is
+        // never rc today — but keep the predicate correct should generic rc ever land.
+        const GenericInst *g = &c->ginsts[t - GENERIC_BASE];
+        return !g->is_enum && g->base >= 0 && g->base < c->struct_count && c->structs[g->base].is_rc;
+    }
+    return 0;
 }
 
 
@@ -2090,6 +2117,37 @@ static int is_scalar_type(SemType t) {
 }
 
 
+// is_immutably_shareable reports whether a type may be a FIELD of an `rc struct` (R3, the deep-
+// immutability formation whitelist). It must be a CLOSED POSITIVE whitelist: a field that can carry
+// a mutable interior into a shared value (an array, a plain/mutable struct, a Ptr, a function/closure
+// that could capture a mutable, a channel, an interface, or a bare type parameter) breaks the
+// `shared => immutable` invariant and would re-open reference cycles, so every one of those is FALSE.
+static int is_immutably_shareable(Checker *c, SemType t) {
+    if (is_scalar_type(t) || t == TY_STRING) {
+        return 1;
+    }
+    if (is_enum_type(t)) {
+        return 1;   // a plain enum is itself an immutable refcounted shareable
+    }
+    if (is_generic_inst(t)) {
+        const GenericInst *g = &c->ginsts[t - GENERIC_BASE];
+        if (!g->is_enum) {
+            return 0;   // a generic STRUCT instance is a mutable aggregate (generic rc is banned);
+        }               // only a generic ENUM can be a shareable, and only if...
+        for (int k = 0; k < g->arg_count; k++) {
+            if (!is_immutably_shareable(c, g->args[k])) {
+                return 0;   // ...every concrete payload arg is itself shareable (Option<int> ok,
+            }               // Option<[int]> / Result<MutStruct,_> NOT — closes the generic smuggle)
+        }
+        return 1;
+    }
+    if (is_struct_type(t) && c->structs[t].is_rc) {
+        return 1;   // another rc struct (it runs its own formation pass; safe under forward-ref)
+    }
+    return 0;       // array, plain/mutable struct, Ptr, fn/closure, channel, interface, type-param
+}
+
+
 // nested_inline_sid reports the struct type id if `t` is a struct that can be stored fully
 // INLINE inside a parent (value-types 3b.5): every field is a scalar or itself an inline-able
 // struct (recursively), with no boxed/refcounted/pointer field. Such a field is packed into the
@@ -2099,6 +2157,9 @@ static int is_scalar_type(SemType t) {
 static int nested_inline_sid(Checker *c, SemType t) {
     if (!is_struct_type(t)) {
         return -1;
+    }
+    if (c->structs[t].is_rc) {
+        return -1;   // R2: an rc struct is boxed + refcounted, never packed inline by value
     }
     StructInfo *si = &c->structs[t];
     if (si->field_count == 0) {
@@ -2128,6 +2189,9 @@ static int array_inline_struct_id(Checker *c, SemType elem) {
     if (!is_struct_type(elem)) {
         return -1;
     }
+    if (c->structs[elem].is_rc) {
+        return -1;   // R2: [RcT] stores boxed AEK_BOXED elements (retained on copy), not inline
+    }
     StructInfo *si = &c->structs[elem];
     int total = 0;
     for (int f = 0; f < si->field_count; f++) {
@@ -2156,6 +2220,9 @@ static int array_inline_struct_id(Checker *c, SemType elem) {
 static int struct_all_scalar_id(Checker *c, SemType t) {
     if (!is_struct_type(t)) {
         return -1;
+    }
+    if (c->structs[t].is_rc) {
+        return -1;   // R2: an rc struct stays boxed + refcounted, never multi-slot on the stack
     }
     StructInfo *si = &c->structs[t];
     if (si->field_count == 0) {
@@ -3622,6 +3689,16 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                         type_error(c, e->line, e->col,
                                    "method call requires a struct value");
                     }
+                } else if (mi == NULL && strcmp(callee->as.get.name, "clone") == 0 &&
+                           type_is_rc(c, ot)) {
+                    // `.clone()` on an `rc struct` is meaningless: the value is immutable and shared,
+                    // so there is nothing a private copy buys (you can't mutate it), and a deep copy
+                    // would defeat the sharing. Binding it (`let b = a`) already gives another owner.
+                    type_error(c, e->line, e->col,
+                               "an 'rc struct' is immutable and shared; bind it ('let b = a') to "
+                               "gain another owner — '.clone()' (an independent, mutable copy) is "
+                               "not meaningful for an rc value");
+                    return ot;
                 } else if (mi == NULL && strcmp(callee->as.get.name, "clone") == 0) {
                     // Built-in `.clone()` deep copy on a value-struct (incl. a generic struct
                     // such as Map<K,V> / Set<K>), available when the struct has no user method
@@ -5084,6 +5161,25 @@ static void check_stmt(Checker *c, Stmt *s) {
                 // target (which also annotates field_index for codegen); the root
                 // of the access path must be a mutable place (`var` / `mut` / `move`).
                 SemType ft = check_expr(c, target);
+                // R4: a write must not pass THROUGH an `rc` value. The root-only is_var check
+                // below is insufficient — a `var`, non-rc container holding an rc field would
+                // otherwise let `w.r.x = v` mutate a deeply-immutable shared interior (the
+                // laundering hole the adversarial design found). Re-resolve EACH intermediate
+                // object's type and reject if any is rc. Gated on any_rc so non-rc code is untouched.
+                if (c->any_rc) {
+                    for (Expr *step = target;
+                         step->kind == EXPR_GET || step->kind == EXPR_INDEX; ) {
+                        Expr *obj = step->kind == EXPR_GET ? step->as.get.object
+                                                           : step->as.index.object;
+                        if (type_is_rc(c, check_expr(c, obj))) {
+                            type_error(c, s->line, s->col,
+                                       "cannot assign through a field or element of an 'rc' value; "
+                                       "an rc struct is deeply immutable and shared");
+                            break;
+                        }
+                        step = obj;
+                    }
+                }
                 // Walk the access path to its root through BOTH field (`o.f`) and element
                 // (`a[i]`) steps, so `arr[i].field = v` and `a[i].b.c = v` are rooted just like
                 // `a[i] = v` is (OFI-061). The root must be a mutable, non-borrowed place.
@@ -5121,6 +5217,24 @@ static void check_stmt(Checker *c, Stmt *s) {
                 // by an int. As with a field, the access path must be rooted at a
                 // mutable place (a `var` binding or a `mut`/`move` parameter).
                 SemType et = check_expr(c, target);
+                // R4: reject a write that passes THROUGH an rc value (e.g. `rcArrayElem.f = v`,
+                // or any path with an rc step before the final element). Assigning an element of
+                // `[RcT]` itself is fine — the array is the mutable owner and consume() increfs the
+                // new rc / releases the old — so only INTERIOR rc objects are rejected here.
+                if (c->any_rc) {
+                    for (Expr *step = target;
+                         step->kind == EXPR_GET || step->kind == EXPR_INDEX; ) {
+                        Expr *obj = step->kind == EXPR_GET ? step->as.get.object
+                                                           : step->as.index.object;
+                        if (type_is_rc(c, check_expr(c, obj))) {
+                            type_error(c, s->line, s->col,
+                                       "cannot assign through a field or element of an 'rc' value; "
+                                       "an rc struct is deeply immutable and shared");
+                            break;
+                        }
+                        step = obj;
+                    }
+                }
                 Expr *root = target;
                 while (root->kind == EXPR_INDEX || root->kind == EXPR_GET) {
                     root = root->kind == EXPR_INDEX ? root->as.index.object
@@ -6682,6 +6796,16 @@ static void collect_struct_fields(Checker *c, int index, const Decl *d) {
             type_error(c, d->line, d->col,
                        "struct field types must be 'int', 'bool', 'float', "
                        "'string', a struct/enum, or a type parameter");
+        } else if (si->is_rc && !is_immutably_shareable(c, ft)) {
+            // R3: an `rc struct` is deeply immutable + shared, so every field must itself be
+            // immutably shareable. A field that can carry a MUTABLE interior into the shared value
+            // (an array, a plain struct, a Ptr, a function/closure, a channel, an interface, or a
+            // bare type parameter) would defeat `shared => immutable` and re-open reference cycles.
+            type_error(c, f->line, f->col,
+                       "an 'rc struct' field must be immutably shareable (a scalar, string, enum, "
+                       "or another 'rc struct'); an array, a plain struct, a function, a channel, "
+                       "or a 'Ptr' can carry a mutable interior into a shared value");
+            ft = TY_ERROR;
         }
         si->fields = grow_arena_vec(c->arena, si->fields, si->field_count, &si->fields_cap,
                                     si->field_count + 1, sizeof(FieldInfo));
@@ -6744,6 +6868,13 @@ static void collect_struct_methods(Checker *c, int index, const Decl *d, int *fi
         if (fn->param_count == 0 || !fn->params[0].is_self) {
             type_error(c, fn->line, fn->col,
                        "a method's first parameter must be 'self'");
+        }
+        if (si->is_rc && (mi->self_qual == OWN_MUT || mi->self_qual == OWN_MOVE)) {
+            // R6: an `rc struct` is shared + immutable, so a method may not take `mut self`
+            // (it would mutate a shared value) or `move self` (consume one owner of a shared one).
+            type_error(c, fn->line, fn->col,
+                       "an 'rc struct' method cannot take 'mut self' or 'move self'; "
+                       "an rc value is immutable and shared");
         }
         mi->param_count = 0;
         for (size_t i = 0; i < fn->param_count && mi->param_count < MAX_PARAMS; i++) {
@@ -7559,6 +7690,7 @@ static void build_layouts(Checker *c, StructLayout **out_layouts, int *out_count
         int off = 0;
         L[s].field_count = si->field_count;
         L[s].base_id     = s;
+        L[s].is_rc       = si->is_rc;
         layout_alloc_fields(c, &L[s], si->field_count + si->witness_count);
         for (int f = 0; f < si->field_count; f++) {
             SemType ft = si->fields[f].type;
@@ -7590,6 +7722,7 @@ static void build_layouts(Checker *c, StructLayout **out_layouts, int *out_count
         int off = 0;
         L[id].field_count = base->field_count;
         L[id].base_id     = g->base;
+        L[id].is_rc       = 0;   // a generic instance is never rc (R7 bans generic rc structs)
         layout_alloc_fields(c, &L[id], base->field_count + base->witness_count);
         for (int f = 0; f < base->field_count; f++) {
             SemType ft = subst(c, g, base->fields[f].type);
@@ -7671,6 +7804,7 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
     c.loop_depth     = 0;
     c.loop_backedge_moved = NULL;   // OFI-074
     c.unreachable    = 0;   // OFI-100: initialise the diverging-code flag (don't read indeterminate stack)
+    c.any_rc         = 0;   // set in pass 1a if any `rc struct` is declared
     c.nursery_depth  = 0;
     c.fn_count        = 0;
     c.structs         = NULL;
@@ -7723,8 +7857,22 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                 si->witness_count    = 0;
                 si->implements_count = 0;
                 si->module           = c.current_module;
+                si->is_rc            = d->as.struct_.is_rc;
+                if (si->is_rc) {
+                    c.any_rc = 1;   // enable the rc-specific mutation guards for this program
+                }
                 si->def_line         = d->line;
                 si->def_col          = d->col;
+                // R7: a GENERIC `rc struct<T>` is deferred (v1). A type-parameter field is erased
+                // at the declaration, so its deep immutability can't be decided here without
+                // net-new use-site bound machinery; a non-generic rc struct is the complete,
+                // sound feature. Reject it rather than admit an unsound shared-mutable smuggle.
+                if (si->is_rc && d->as.struct_.generic_count > 0) {
+                    type_error(&c, d->line, d->col,
+                               "a generic 'rc struct' is not supported yet; an 'rc struct' must "
+                               "have only concrete immutably-shareable fields (scalar, string, "
+                               "enum, or another rc struct)");
+                }
                 for (size_t g = 0; g < d->as.struct_.generic_count &&
                                    si->generic_count < MAX_TYPE_ARGS; g++) {
                     // Bounds are resolved in pass 1a′′ below (after interfaces are

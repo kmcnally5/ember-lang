@@ -2471,6 +2471,7 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         // Copy the checker's packed layout (same struct-id order).
         if (si < layout_count) {
             out->structs[si].total_size = layouts[si].total_size;
+            out->structs[si].is_rc      = layouts[si].is_rc;
             for (int f = 0; f < lf; f++) {
                 out->structs[si].offset[f]       = layouts[si].offset[f];
                 out->structs[si].kind[f]         = layouts[si].kind[f];
@@ -2493,6 +2494,7 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         out->structs[id].name        = dup_str(out->structs[b].name);
         out->structs[id].field_count = layouts[id].field_count;
         out->structs[id].total_size  = layouts[id].total_size;
+        out->structs[id].is_rc       = layouts[id].is_rc;
         structtype_alloc_fields(&out->structs[id], layouts[id].field_count);
         for (int f = 0; f < layouts[id].field_count; f++) {
             out->structs[id].offset[f]       = layouts[id].offset[f];

@@ -197,6 +197,9 @@ static int is_value_struct(CgcGen *g, int sid) {
         return 0;
     }
     const StructLayout *L = &g->layouts[sid];
+    if (L->is_rc) {
+        return 0;   // R2: an `rc struct` is BOXED + refcounted (like an enum), never a C value-type
+    }
     // A monomorphized generic-struct instance (base_id != its own sid — e.g. Box<int>) is NEVER
     // a value-type here: the native backend ERASES generics (one body per method over a uniform
     // Value), so a generic struct's methods take a BOXED self and return a boxed result. Giving
@@ -3177,10 +3180,11 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
         for (int s = 0; s < layout_count; s++) {
             const StructLayout *L = &layouts[s];
             if (L->field_count > 0) {
-                fprintf(out, "    { 0, %d, %d, em_s%d_off, em_s%d_knd, em_s%d_fst },\n",
-                        L->field_count, L->total_size, s, s, s);
+                fprintf(out, "    { 0, %d, %d, %d, em_s%d_off, em_s%d_knd, em_s%d_fst },\n",
+                        L->field_count, L->total_size, L->is_rc, s, s, s);
             } else {
-                fprintf(out, "    { 0, %d, %d, 0, 0, 0 },\n", L->field_count, L->total_size);
+                fprintf(out, "    { 0, %d, %d, %d, 0, 0, 0 },\n",
+                        L->field_count, L->total_size, L->is_rc);
             }
         }
         fputs("};\n", out);

@@ -231,6 +231,22 @@ void drop_value(EmberRt *ctx, Value v) {
                 }
                 return;
             }
+            if (ctx->structs[s->type_id].is_rc) {
+                // An `rc struct` is shared + reference-counted like an enum, but its fields are
+                // PACKED per the StructType descriptor (not all-16-byte). At the last owner,
+                // release each boxed field, then reclaim. (reclaim self-gates on the home arena,
+                // so a cross-thread last release defers the shell to the home sweep — OFI-018.)
+                if (OBJ_RELEASE(o) <= 0) {
+                    const StructType *st = &ctx->structs[s->type_id];
+                    for (int i = 0; i < st->field_count; i++) {
+                        if (st->kind[i] == AEK_BOXED) {
+                            drop_value(ctx, value_box(s->data + st->offset[i], AEK_BOXED));
+                        }
+                    }
+                    reclaim(ctx, o);
+                }
+                return;
+            }
             // A struct is a unique owner: free it, first releasing each BOXED field
             // (a nested struct recursively, a refcounted field by dropping a ref).
             // Packed scalar fields own nothing, so the descriptor's kinds drive it.
@@ -425,13 +441,14 @@ Value own_into_slot(EmberRt *ctx, Value v) {
         return v;
     }
     Obj *o = AS_OBJ(v);
-    if (o->type == OBJ_STRUCT && !((ObjStruct *)o)->is_enum) {
-        return clone_struct_value(ctx, (ObjStruct *)o);
+    if (o->type == OBJ_STRUCT && !((ObjStruct *)o)->is_enum &&
+        !ctx->structs[((ObjStruct *)o)->type_id].is_rc) {
+        return clone_struct_value(ctx, (ObjStruct *)o);   // a unique-owner struct deep-clones
     }
     if (o->type == OBJ_ARRAY && !((ObjArray *)o)->borrowed) {
         return clone_array_value(ctx, (ObjArray *)o);
     }
-    OBJ_RETAIN(o);
+    OBJ_RETAIN(o);   // a shareable (string/enum/closure/channel) OR an `rc struct`: incref, don't clone
     return v;
 }
 
@@ -441,13 +458,14 @@ Value clone_owned_else_borrow(EmberRt *ctx, Value v) {
         return v;
     }
     Obj *o = AS_OBJ(v);
-    if (o->type == OBJ_STRUCT && !((ObjStruct *)o)->is_enum) {
-        return clone_struct_value(ctx, (ObjStruct *)o);
+    if (o->type == OBJ_STRUCT && !((ObjStruct *)o)->is_enum &&
+        !ctx->structs[((ObjStruct *)o)->type_id].is_rc) {
+        return clone_struct_value(ctx, (ObjStruct *)o);   // a unique-owner struct deep-clones
     }
     if (o->type == OBJ_ARRAY && !((ObjArray *)o)->borrowed) {
         return clone_array_value(ctx, (ObjArray *)o);
     }
-    return v;
+    return v;   // a shareable or an `rc struct`: borrow (no clone; the caller increfs if it keeps it)
 }
 
 

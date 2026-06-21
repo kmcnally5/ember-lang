@@ -526,6 +526,7 @@ struct Decl {
             size_t        field_count;
             FnDecl       *methods;
             size_t        method_count;
+            int           is_rc;          // `rc struct`: a shared, deeply-immutable, refcounted struct
         } struct_;
         struct {
             const char   *name;

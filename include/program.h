@@ -45,6 +45,9 @@ typedef struct {
     char *name;
     int   field_count;
     int   total_size;
+    int   is_rc;         // `rc struct`: a shared, refcounted, deeply-immutable struct — drop_value
+                         // reclaims it at the LAST owner (gated on the refcount) like an enum, and
+                         // own_into_slot RETAINS rather than deep-clones it. 0 for an ordinary struct.
     // Per-field layout, dynamically sized to field_count (no EMBER_MAX_FIELDS cap — a struct may have
     // any number of fields; the field-index operands are LEB128 OPK_IDX). Owned by the CompiledProgram
     // and released by compiled_program_free. Accessed by index (offset[i]), identical to an array.
@@ -63,6 +66,8 @@ typedef struct {
     int total_size;
     int field_count;
     int base_id;                    // declared struct this layout belongs to/specialises
+    int is_rc;                      // `rc struct` (copied into StructType.is_rc); the native backend
+                                    // reads it via is_value_struct to box rather than value-type it
     // Per-field layout, sized to field_count (no cap). The checker arena-allocates these in
     // build_layouts, so the StructLayout array can be freed with a plain free() and the per-entry
     // arrays are reclaimed wholesale at arena_free (which runs after codegen has read them).

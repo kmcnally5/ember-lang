@@ -1,0 +1,1 @@
+tests/run/error_rc_bad_field.em:5:5: error: an 'rc struct' field must be immutably shareable (a scalar, string, enum, or another 'rc struct'); an array, a plain struct, a function, a channel, or a 'Ptr' can carry a mutable interior into a shared value

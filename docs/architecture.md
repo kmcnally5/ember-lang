@@ -1526,3 +1526,46 @@ stacks (OFI-088); thousands work today. **Verification (the gate to flip the def
 detector, clean), `make asan-mn` (UAF, clean), `tools/mn-stress.sh`/`make mn-stress` (the new concurrency fuzzer:
 8000-fiber headline, fan-in/out, nested nurseries, deadlock, cancel, pipeline — all watchdog-guarded), and a
 byte-for-byte differential against the serial runtime over the run-stage suite.
+
+## Decision: `rc struct` is a per-TYPE flag + a per-step mutation walk — boxed like an enum, immutable by formation
+
+`rc struct` (shared, immutable, reference-counted user structs — the manifesto's "blessed Rc") is
+implemented so it rides the EXISTING shareable machinery rather than adding a parallel one. Key choices:
+
+- **`is_rc` lives on the TYPE, not the instance.** It is one flag threaded `StructInfo → StructLayout →
+  StructType` (and read by the native backend's `is_value_struct`). The shared runtime (`drop_value`,
+  `own_into_slot`) reads `ctx->structs[type_id].is_rc`, so BOTH backends get correct behaviour with no
+  `ObjStruct`/`alloc_instance` change — an rc value is just a boxed, refcounted `ObjStruct` (refcount
+  already inits to 1), reclaimed at the last owner via the StructType descriptor's boxed-field loop,
+  exactly like an enum but with PACKED (not all-16-byte) fields. Chosen over a distinct `ObjStruct.is_enum`
+  sibling because the rc-ness is a property of the type, and every reclamation/ownership site already has
+  the `type_id` in hand. (Watch-out found in the process: the native backend emits a POSITIONAL
+  `StructType` initializer, so adding the `is_rc` field silently misaligned it — fixed, filed as an OFI.)
+
+- **The classifier flips do the routing.** `is_move_type(rc)=0` + `is_refcounted(rc)=1` move an rc value
+  onto the existing incref/alias path in `consume()` (the same one strings/enums take), so `let b = a`
+  increfs with no new code. Six layout predicates (`nested_inline_sid`, `struct_all_scalar_id`,
+  `array_inline_struct_id`, …) bail to "boxed" for rc, so it is never inlined/value-typed/multi-slot —
+  no INCREF-then-unbox-free drift.
+
+- **Deep immutability is enforced two ways.** Formation: a closed positive whitelist
+  (`is_immutably_shareable`) at the field site — a field must be scalar/string/enum (generic enums only
+  if every concrete arg recurses-shareable)/another rc struct; arrays, plain structs, `Ptr`, fn/closure,
+  channels, interfaces, and bare type-params are refused. Mutation: a **per-step path-walk** at every
+  assignment target — the pre-existing gate checked only the ROOT binding's `var`-ness, which an
+  adversarial design pass showed is insufficient (a `var` non-rc wrapper holding an rc field would launder
+  `w.r.x = v` into a shared interior), so the gate now rejects a write THROUGH any rc step, however reached.
+  These two, plus eager bottom-up construction, make a reference cycle unconstructable — preserving
+  refcount completeness.
+
+- **Generic `rc struct<T>` is deferred (v1).** A type-param field is erased at the declaration, so deep
+  immutability can't be decided there without net-new use-site bound machinery for zero current callers.
+  Rejected at the decl; non-generic rc is the complete, sound feature.
+
+- **`rc` is a CONTEXTUAL keyword, not reserved** — lexed as an identifier, special only immediately before
+  `struct` (`rc struct …`). `rc` is a very common identifier ("return code"); reserving it would break code.
+
+**Verification:** the soundness was designed via a 14-agent adversarial workflow (all 8 smuggle vectors
+reduced to these rules); each vector has a reject test, the accept path has run + native-differential
+golden tests, and Crucible gained an **rc seed mode** (a quarter of its seeds declare `rc struct`s and
+churn them through the aggregate/leak/diff/double-drop oracles) — 187 seeds clean.

@@ -116,11 +116,16 @@ KNOWN="$ROOT/tools/crucible-known.txt"
 is_known() { [ -f "$KNOWN" ] && grep -v '^#' "$KNOWN" | grep -qxF "$1"; }
 
 # ---- the soak loop ------------------------------------------------------------------------------
-say "crucible: running $COUNT seeds through 5 oracles…"
-seen=" "; finds=0; new=0; clean=0; i=1
-while [ "$i" -le "$COUNT" ]; do
-    "$GEN" "$i" 30 > "$TMP/p.em"
-    sig=$(classify "$TMP/p.em" "$i")
+# A quarter of the budget runs in RC MODE (seeds >= CRUCIBLE_RC_BASE in the generator): the same five
+# oracles over `rc struct` programs, so rc representation drift / double-free / leak is fuzzed too.
+RC_BASE=1000000
+rc_count=$((COUNT / 4)); [ "$rc_count" -lt 1 ] && rc_count=1
+say "crucible: running $COUNT plain + $rc_count rc seeds through 5 oracles…"
+seen=" "; finds=0; new=0; clean=0
+run_seed() {
+    s="$1"
+    "$GEN" "$s" 30 > "$TMP/p.em"
+    sig=$(classify "$TMP/p.em" "$s")
     if [ -n "$sig" ]; then
         case "$seen" in
             *" $sig "*) : ;;
@@ -132,21 +137,25 @@ while [ "$i" -le "$COUNT" ]; do
                 shrink "$TMP/p.em" "$sig" > "$out"
                 ops=$(grep -c '^fn op' "$out")
                 if is_known "$sig"; then
-                    say "── [known] [$sig]  seed=$i  (minimal: $ops op)"
+                    say "── [known] [$sig]  seed=$s  (minimal: $ops op)"
                 else
                     new=$((new + 1))
-                    say "── [NEW]   [$sig]  seed=$i  → ${out#$ROOT/}  (minimal: $ops op)"
+                    say "── [NEW]   [$sig]  seed=$s  → ${out#$ROOT/}  (minimal: $ops op)"
                 fi
                 ;;
         esac
     else
         clean=$((clean + 1))
     fi
-    i=$((i + 1))
-done
+}
+i=1
+while [ "$i" -le "$COUNT" ]; do run_seed "$i"; i=$((i + 1)); done
+i=1
+while [ "$i" -le "$rc_count" ]; do run_seed "$((RC_BASE + i))"; i=$((i + 1)); done
 
+total=$((COUNT + rc_count))
 say ""
-say "crucible: $COUNT seeds → $clean clean, $finds distinct ($new NEW)."
+say "crucible: $total seeds → $clean clean, $finds distinct ($new NEW)."
 if [ "$new" = 0 ]; then
     say "crucible: ✓ no new memory faults."
     exit 0

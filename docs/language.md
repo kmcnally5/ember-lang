@@ -1601,6 +1601,20 @@ owned; immutable values are shared.**
   and the value is freed only when the last owner goes. Freeing a container recursively releases
   what it holds — an array of strings frees its strings, an enum carrying a payload frees it.
 
+- **`rc struct` (shared, immutable user structs).** Prefix a struct declaration with `rc` to move
+  it from the unique-owner class into the shared, reference-counted class — the *same* mechanism
+  strings and enums already use. Many bindings may then name one instance (`let b = a` increfs
+  instead of moving or deep-copying; `a` stays live), reclaimed at the last owner. The price is
+  **deep immutability**: an `rc struct` may never be mutated (no `var` rebinding of its fields, no
+  field/element write *through* it, no `mut self`/`move self` methods), and every field must itself
+  be immutably shareable — a scalar, string, enum, or another `rc struct`. That restriction is
+  exactly what keeps reference counting complete: a shared value that cannot be mutated cannot be
+  made to point back at an ancestor, so **no `rc` value can ever close a reference cycle**. It is
+  the blessed tool for *shared, immutable, graph-shaped* data — a parsed config held by many
+  components, an immutable AST, a persistent (structurally-shared) list or tree. There is no
+  in-place mutation, so to "change" one you build a new value (persistent-data-structure style).
+  Generic `rc struct`s (`rc struct Box<T>`) are not yet supported — a v1 restriction.
+
 ```ember
 fn main() -> string {
     let p = Point { x: 1, y: 2 }   // a struct...
@@ -1608,6 +1622,21 @@ fn main() -> string {
     let t = s                      // t aliases s (refcount 2)
     return t                       // t escapes to the caller; p is freed at the
 }                                  // brace, and s releases its reference (one left)
+```
+
+```ember
+rc struct Config {                 // shared, immutable, reference-counted
+    host: string
+    port: int
+}
+
+fn main() -> int {
+    let a = Config { host: "h", port: 80 }
+    let b = a                      // a second owner — an incref, NOT a move or a deep copy
+    let c = a                      // a third owner; a, b, c all name one heap value
+    // a.port = 81                 // compile error: an rc value is immutable
+    return a.port + b.port + c.port // a still live; the value frees when the last owner drops
+}
 ```
 
 Reclamation is eager (at the brace, not at program exit), so long-running programs — e.g.

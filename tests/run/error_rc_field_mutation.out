@@ -1,0 +1,1 @@
+tests/run/error_rc_field_mutation.em:17:18: error: cannot assign through a field or element of an 'rc' value; an rc struct is deeply immutable and shared

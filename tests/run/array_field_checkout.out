@@ -1,0 +1,4 @@
+store=2 copy=3 tag=filled
+store0=one store1=two
+other=0
+=> 0

@@ -1,0 +1,11 @@
+== fn main (arity 0) ==
+0000    5  CONST    0  (= 7)
+0002    |  CONST    1  (= 2)
+0004    6  GET_LOCAL 0
+0006    |  GET_LOCAL 1
+0008    |  BOX_STRUCT 0
+0010    |  UNBOX_STRUCT 0
+0012    7  GET_LOCAL 2
+0014    |  RETURN  
+0015    |  CONST    2  (= 0)
+0017    |  RETURN  

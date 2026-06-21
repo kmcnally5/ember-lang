@@ -1,0 +1,7 @@
+== fn main (arity 0) ==
+0000    3  CONST    0  (= 3)
+0002    |  CONST    1  (= 0.14)
+0004    |  ADD      9
+0006    |  RETURN  
+0007    |  CONST    2  (= 0)
+0009    |  RETURN  

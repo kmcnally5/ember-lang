@@ -1,0 +1,1 @@
+tests/run/error_void_returns_value.em:4:5: error: cannot return a value from a function with no declared return type

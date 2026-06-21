@@ -1,0 +1,1 @@
+tests/run/error_field_missing.em:3:30: error: every struct field must be set exactly once

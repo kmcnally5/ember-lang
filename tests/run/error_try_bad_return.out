@@ -1,0 +1,1 @@
+tests/run/error_try_bad_return.em:4:13: error: '?' here needs the function to return an Option

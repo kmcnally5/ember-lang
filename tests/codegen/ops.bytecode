@@ -1,0 +1,18 @@
+== fn main (arity 0) ==
+0000    5  CONST    0  (= 1)
+0002    |  CONST    1  (= 2)
+0004    |  ADD      0
+0006    |  CONST    2  (= 3)
+0008    |  CONST    3  (= 4)
+0010    |  MUL      0
+0012    |  CONST    4  (= 5)
+0014    |  DIV      0
+0016    |  CONST    5  (= 6)
+0018    |  MOD      0
+0020    |  SUB      0
+0022    |  CONST    6  (= 7)
+0024    |  NEG      0
+0026    |  SUB      0
+0028    |  RETURN  
+0029    |  CONST    7  (= 0)
+0031    |  RETURN  

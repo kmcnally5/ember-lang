@@ -1,0 +1,94 @@
+== fn Version.compare (arity 2) ==
+0000   10  GET_LOCAL 0
+0002    |  GET_FIELD 0
+0004    |  GET_LOCAL 1
+0006    |  GET_FIELD 0
+0008    |  SUB      0
+0010    |  RETURN  
+0011    |  CONST    0  (= 0)
+0013    |  RETURN  
+== fn max (arity 2) ==
+0000   14  GET_LOCAL 1
+0002    |  GET_LOCAL 2
+0004    |  GET_LOCAL 0
+0006    |  GET_FIELD 0
+0008    |  CALL_INDIRECT 2
+0010    |  CONST    0  (= 0)
+0012    |  GE       0
+0014    |  JUMP_IF_FALSE 16 (-> 0033)
+0017    |  POP     
+0018   15  GET_LOCAL 1
+0020    |  CONST    1  (= 0)
+0022    |  SET_LOCAL 1
+0024    |  POP     
+0025    |  DROP     1
+0027    |  DROP     2
+0029    |  RETURN  
+0030    |  JUMP     1 (-> 0034)
+0033    |  POP     
+0034   17  GET_LOCAL 2
+0036    |  CONST    2  (= 0)
+0038    |  SET_LOCAL 2
+0040    |  POP     
+0041    |  DROP     1
+0043    |  DROP     2
+0045    |  RETURN  
+0046    |  CONST    3  (= 0)
+0048    |  DROP     1
+0050    |  DROP     2
+0052    |  RETURN  
+== fn main (arity 0) ==
+0000   20  CONST    0  (= 3)
+0002   21  CONST    1  (= 8)
+0004   22  CONST    2  (= 3)
+0006   23  CONST    3  (= 8)
+0008   24  CONST    4  (= 0)
+0010    |  NEW_ENUM 0 0 1
+0014    |  GET_LOCAL 0
+0016    |  BOX_STRUCT 0
+0018    |  GET_LOCAL 1
+0020    |  BOX_STRUCT 0
+0022    |  CALL     3 3
+0025    |  GET_FIELD_OWNED 0
+0027    |  CONST    5  (= 0)
+0029    |  NEW_ENUM 0 0 1
+0033    |  GET_LOCAL 3
+0035    |  BOX_STRUCT 0
+0037    |  GET_LOCAL 2
+0039    |  BOX_STRUCT 0
+0041    |  CALL     3 3
+0044    |  GET_FIELD_OWNED 0
+0046    |  ADD      0
+0048    |  RETURN  
+0049    |  CONST    6  (= 0)
+0051    |  RETURN  
+== fn max (arity 2) ==
+0000   14  GET_LOCAL 1
+0002    |  GET_LOCAL 2
+0004    |  GET_LOCAL 0
+0006    |  GET_FIELD 0
+0008    |  CALL_INDIRECT 2
+0010    |  CONST    0  (= 0)
+0012    |  GE       0
+0014    |  JUMP_IF_FALSE 16 (-> 0033)
+0017    |  POP     
+0018   15  GET_LOCAL 1
+0020    |  CONST    1  (= 0)
+0022    |  SET_LOCAL 1
+0024    |  POP     
+0025    |  DROP     1
+0027    |  DROP     2
+0029    |  RETURN  
+0030    |  JUMP     1 (-> 0034)
+0033    |  POP     
+0034   17  GET_LOCAL 2
+0036    |  CONST    2  (= 0)
+0038    |  SET_LOCAL 2
+0040    |  POP     
+0041    |  DROP     1
+0043    |  DROP     2
+0045    |  RETURN  
+0046    |  CONST    3  (= 0)
+0048    |  DROP     1
+0050    |  DROP     2
+0052    |  RETURN  

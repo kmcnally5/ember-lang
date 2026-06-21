@@ -1,0 +1,14 @@
+{"fn":"main","ip":0,"op":"CONST","line":4,"stack":[]}
+{"fn":"main","ip":2,"op":"GET_LOCAL","line":5,"stack":[2]}
+{"fn":"main","ip":4,"op":"CONST","line":5,"stack":[2,2]}
+{"fn":"main","ip":6,"op":"GT","line":5,"stack":[2,2,1]}
+{"fn":"main","ip":8,"op":"JUMP_IF_FALSE","line":5,"stack":[2,1]}
+{"fn":"main","ip":11,"op":"POP","line":5,"stack":[2,1]}
+{"fn":"main","ip":12,"op":"GET_LOCAL","line":6,"stack":[2]}
+{"fn":"main","ip":14,"op":"CONST","line":6,"stack":[2,2]}
+{"fn":"main","ip":16,"op":"ADD","line":6,"stack":[2,2,3]}
+{"fn":"main","ip":18,"op":"SET_LOCAL","line":6,"stack":[2,5]}
+{"fn":"main","ip":20,"op":"POP","line":6,"stack":[5,5]}
+{"fn":"main","ip":21,"op":"JUMP","line":6,"stack":[5]}
+{"fn":"main","ip":25,"op":"GET_LOCAL","line":8,"stack":[5]}
+{"fn":"main","ip":27,"op":"RETURN","line":8,"stack":[5,5]}

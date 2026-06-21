@@ -1,0 +1,1 @@
+tests/run/error_escape_borrow.em:7:5: error: cannot return a borrowed value — it would escape the function; take the parameter as 'move'

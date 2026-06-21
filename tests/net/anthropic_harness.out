@@ -1,0 +1,7 @@
+turns=2 role0=0 kind0=0 role1=1
+full: model=true system=true tools=true tool_choice=true id=claude-opus-4-8
+bare: system=false tools=false tool_choice=false
+ctl: is_tool=true is_tool_plain=false id=toolu_42 name=read_file input=ARGS
+cap: short=abc kept4=true truncated=true
+models: claude-opus-4-8 | claude-sonnet-4-6 | claude-haiku-4-5-20251001
+=> 0

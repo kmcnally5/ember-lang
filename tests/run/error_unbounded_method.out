@@ -1,0 +1,1 @@
+tests/run/error_unbounded_method.em:3:12: error: cannot call a method on an unbounded type parameter

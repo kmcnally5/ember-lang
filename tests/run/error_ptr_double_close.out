@@ -1,0 +1,3 @@
+tests/run/error_ptr_double_close.em:12:20: error: use of 'f' after it was moved
+tests/run/error_ptr_double_close.em:12:20: help: a move transfers ownership; pass it without `move` to borrow it instead, or make a copy before the move
+tests/run/error_ptr_double_close.em:11:20: note: value moved here

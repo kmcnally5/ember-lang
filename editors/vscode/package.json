@@ -1,0 +1,46 @@
+{
+  "name": "ember-lang",
+  "displayName": "Ember Language",
+  "description": "Ember language support: syntax highlighting plus diagnostics, hover, go-to-definition, completion, and document symbols via the in-tree emberc language server.",
+  "version": "0.1.0",
+  "publisher": "ember",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:ember"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ember",
+        "aliases": ["Ember", "ember"],
+        "extensions": [".em"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ember",
+        "scopeName": "source.ember",
+        "path": "./syntaxes/ember.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ember",
+      "properties": {
+        "emberLsp.serverPath": {
+          "type": "string",
+          "default": "/Users/karlmcnally/.ember/bin/emberc",
+          "description": "Absolute path to the emberc binary (started with --lsp)."
+        },
+        "emberLsp.stdPath": {
+          "type": "string",
+          "default": "/Users/karlmcnally/.ember/std",
+          "description": "Path to the Ember standard library (passed as EMBER_STD). Leave as the default unless you moved the install."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  }
+}

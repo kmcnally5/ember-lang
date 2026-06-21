@@ -1,0 +1,63 @@
+== fn plus_one (arity 1) ==
+0000    4  GET_LOCAL 0
+0002    |  DUP     
+0003    |  GET_TAG 
+0004    |  CONST    0  (= 0)
+0006    |  EQ      
+0007    |  JUMP_IF_FALSE 6 (-> 0016)
+0010    |  POP     
+0011    |  GET_FIELD 0
+0013    |  JUMP     4 (-> 0020)
+0016    |  POP     
+0017    |  DROP     0
+0019    |  RETURN  
+0020    5  GET_LOCAL 1
+0022    |  CONST    1  (= 1)
+0024    |  ADD      0
+0026    |  NEW_ENUM 0 0 1
+0030    |  DROP     0
+0032    |  RETURN  
+0033    |  CONST    2  (= 0)
+0035    |  DROP     0
+0037    |  RETURN  
+== fn main (arity 0) ==
+0000    8  CONST    0  (= 41)
+0002    |  NEW_ENUM 0 0 1
+0006    9  GET_LOCAL 0
+0008    |  INCREF  
+0009    |  CALL     0 1
+0012    |  GET_LOCAL 1
+0014    |  GET_TAG 
+0015    |  CONST    1  (= 0)
+0017    |  EQ      
+0018    |  JUMP_IF_FALSE 14 (-> 0035)
+0021    |  POP     
+0022    |  GET_LOCAL 1
+0024    |  GET_FIELD 0
+0026   10  GET_LOCAL 2
+0028    |  DROP     0
+0030    |  RETURN  
+0031    |  POP     
+0032    |  JUMP     22 (-> 0057)
+0035    |  POP     
+0036    |  GET_LOCAL 1
+0038    |  GET_TAG 
+0039    |  CONST    2  (= 1)
+0041    |  EQ      
+0042    |  JUMP_IF_FALSE 11 (-> 0056)
+0045    |  POP     
+0046   11  CONST    3  (= 1)
+0048    |  NEG      0
+0050    |  DROP     0
+0052    |  RETURN  
+0053    |  JUMP     1 (-> 0057)
+0056    |  POP     
+0057    |  DROP     1
+0059    |  POP     
+0060   13  CONST    4  (= 1)
+0062    |  NEG      0
+0064    |  DROP     0
+0066    |  RETURN  
+0067    |  CONST    5  (= 0)
+0069    |  DROP     0
+0071    |  RETURN  

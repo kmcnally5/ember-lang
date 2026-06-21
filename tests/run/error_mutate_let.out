@@ -1,0 +1,1 @@
+tests/run/error_mutate_let.em:5:11: error: cannot mutate a field through an immutable binding; declare it 'var' or take 'mut'

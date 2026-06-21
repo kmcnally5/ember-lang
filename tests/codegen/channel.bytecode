@@ -1,0 +1,92 @@
+== fn producer (arity 1) ==
+0000   10  GET_LOCAL 0
+0002    |  CONST    0  (= 10)
+0004    |  SEND    
+0005    |  POP     
+0006   11  GET_LOCAL 0
+0008    |  CONST    1  (= 20)
+0010    |  SEND    
+0011    |  POP     
+0012   12  GET_LOCAL 0
+0014    |  CONST    2  (= 30)
+0016    |  SEND    
+0017    |  POP     
+0018   13  CONST    3  (= 0)
+0020    |  DROP     0
+0022    |  RETURN  
+0023    |  CONST    4  (= 0)
+0025    |  DROP     0
+0027    |  RETURN  
+== fn take (arity 1) ==
+0000   17  GET_LOCAL 0
+0002    |  RECV     0 0 1
+0006    |  GET_LOCAL 1
+0008    |  GET_TAG 
+0009    |  CONST    0  (= 0)
+0011    |  EQ      
+0012    |  JUMP_IF_FALSE 14 (-> 0029)
+0015    |  POP     
+0016    |  GET_LOCAL 1
+0018    |  GET_FIELD 0
+0020   18  GET_LOCAL 2
+0022    |  DROP     0
+0024    |  RETURN  
+0025    |  POP     
+0026    |  JUMP     20 (-> 0049)
+0029    |  POP     
+0030    |  GET_LOCAL 1
+0032    |  GET_TAG 
+0033    |  CONST    1  (= 1)
+0035    |  EQ      
+0036    |  JUMP_IF_FALSE 9 (-> 0048)
+0039    |  POP     
+0040   19  CONST    2  (= 0)
+0042    |  DROP     0
+0044    |  RETURN  
+0045    |  JUMP     1 (-> 0049)
+0048    |  POP     
+0049    |  DROP     1
+0051    |  POP     
+0052   21  CONST    3  (= 0)
+0054    |  DROP     0
+0056    |  RETURN  
+0057    |  CONST    4  (= 0)
+0059    |  DROP     0
+0061    |  RETURN  
+== fn consumer (arity 1) ==
+0000   25  GET_LOCAL 0
+0002    |  INCREF  
+0003    |  CALL     1 1
+0006    |  GET_LOCAL 0
+0008    |  INCREF  
+0009    |  CALL     1 1
+0012    |  ADD      0
+0014    |  GET_LOCAL 0
+0016    |  INCREF  
+0017    |  CALL     1 1
+0020    |  ADD      0
+0022    |  CALL_NATIVE 1 1
+0025    |  POP     
+0026   26  CONST    0  (= 0)
+0028    |  DROP     0
+0030    |  RETURN  
+0031    |  CONST    1  (= 0)
+0033    |  DROP     0
+0035    |  RETURN  
+== fn main (arity 0) ==
+0000   30  CONST    0  (= 2)
+0002    |  CHANNEL_NEW
+0003   31  NURSERY_BEGIN
+0004   32  GET_LOCAL 0
+0006    |  INCREF  
+0007    |  SPAWN    0 1
+0010   33  GET_LOCAL 0
+0012    |  INCREF  
+0013    |  SPAWN    2 1
+0016    |  NURSERY_END
+0017   35  CONST    1  (= 0)
+0019    |  DROP     0
+0021    |  RETURN  
+0022    |  CONST    2  (= 0)
+0024    |  DROP     0
+0026    |  RETURN  

@@ -1,0 +1,3 @@
+tests/run/error_use_after_move.em:6:12: error: use of 'p' after it was moved
+tests/run/error_use_after_move.em:6:12: help: a move transfers ownership; pass it without `move` to borrow it instead, or make a copy before the move
+tests/run/error_use_after_move.em:5:13: note: value moved here

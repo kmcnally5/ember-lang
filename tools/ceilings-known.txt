@@ -1,0 +1,23 @@
+# Ceilings baseline — the EXPECTED outcome of each compiler-limit probe in tools/ceilings.sh.
+# Columns:  <dimension>  <WORKS|CAPPED>
+#   WORKS  — the dimension scales past 256: compiles, runs correctly, VM == native.
+#   CAPPED — hitting it is a CLEAN compile error (a "too many …" message), never a silent wrap.
+# `tools/ceilings.sh` fails if any dimension's actual outcome differs from its line here — a WORKS
+# that regressed to a cap or a miscompile, or a CAPPED that started crashing. Lift a ceiling →
+# flip its line to WORKS. The point of the file: a silent operand-overflow can never reappear
+# unseen (the class behind OFI-007 / OFI-047 / OFI-056).
+# All seven dimensions are now WORKS — the narrow-operand class (OFI-007/047/056) is closed END TO END:
+# every index/slot/id/count operand is LEB128 (OPK_IDX, cannot overflow), and the checker/codegen/native
+# tables that were the binding caps (locals, functions, struct types, per-struct fields, per-enum
+# variants) are now grow-on-demand vectors — no fixed ceiling. Verified to N=2000. If a CAPPED line ever
+# reappears here it is a deliberate, documented guard for a DIFFERENT space (e.g. MAX_FNS still caps
+# top-level `let` GLOBALS, MAX_STRUCTS still caps enum/interface/generic-instance/array-type counts) — a
+# clean error, never a silent wrap. The default probe N is well past the old 256/512 internal buffers.
+
+const       WORKS
+string      WORKS
+local       WORKS
+func        WORKS
+structtype  WORKS
+field       WORKS
+variant     WORKS

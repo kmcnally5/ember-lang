@@ -1,0 +1,7 @@
+check total: FAILED
+  counterexample: total([-1])  =>  postcondition failed in 'total' (ensures, line 6)
+{"event":"check_failed","fn":"total","input":"total([-1])","detail":"postcondition failed in 'total' (ensures, line 6)"}
+check first_ok: FAILED
+  counterexample: first_ok([-1])  =>  postcondition failed in 'first_ok' (ensures, line 18)
+{"event":"check_failed","fn":"first_ok","input":"first_ok([-1])","detail":"postcondition failed in 'first_ok' (ensures, line 18)"}
+checked 2 function(s): 0 passed, 2 failed

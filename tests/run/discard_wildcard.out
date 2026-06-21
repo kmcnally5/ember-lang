@@ -1,0 +1,4 @@
+after removes size=1
+discarded three owned strings
+add1(_, 41, _) = 42
+=> 0

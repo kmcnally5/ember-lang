@@ -1,0 +1,7 @@
+check sum_pt: FAILED
+  counterexample: sum_pt({-1, 0})  =>  postcondition failed in 'sum_pt' (ensures, line 12)
+{"event":"check_failed","fn":"sum_pt","input":"sum_pt({-1, 0})","detail":"postcondition failed in 'sum_pt' (ensures, line 12)"}
+check mixed: FAILED
+  counterexample: mixed(1, {-1, 0})  =>  postcondition failed in 'mixed' (ensures, line 20)
+{"event":"check_failed","fn":"mixed","input":"mixed(1, {-1, 0})","detail":"postcondition failed in 'mixed' (ensures, line 20)"}
+checked 2 function(s): 0 passed, 2 failed

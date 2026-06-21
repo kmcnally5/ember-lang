@@ -1,0 +1,1 @@
+tests/run/error_fn_named_like_type.em:6:1: error: a function cannot be named like a numeric type (i8/i16/i32/i64/int/u8/u16/u32/u64/f32/f64): a call to it would parse as a width conversion and never reach the function (OFI-066) — rename it

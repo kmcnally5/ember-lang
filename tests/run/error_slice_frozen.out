@@ -1,0 +1,1 @@
+tests/run/error_slice_frozen.em:6:5: error: cannot mutate an array while it is borrowed by a slice (the view would dangle)

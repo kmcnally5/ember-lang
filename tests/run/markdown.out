@@ -1,0 +1,13 @@
+H1: Heading
+PARA: A paragraph explaining something across lines.
+QUOTE: A quote from Claude across two lines.
+PARA: Some code:
+CODE[python]: def hello():
+    print("hi")
+BULLET: first item
+BULLET: second item
+BULLET: step one
+BULLET: step two
+TABLE: | Col A | Col B |
+| x1 | y1 |
+=> 0

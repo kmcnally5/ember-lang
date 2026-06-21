@@ -1,0 +1,2 @@
+replay: deterministic — 5 nondeterministic event(s) recorded (5 random, 0 clock, 0 read_line, 0 read_file, 0 ffi); both runs identical
+{"event":"replay","status":"deterministic","events":5,"random":5,"clock":0,"read_line":0,"read_file":0,"ffi":0}

@@ -1,0 +1,2 @@
+tests/run/error_print_as_value.em:3:5: error: cannot bind a call that returns no value
+tests/run/error_print_as_value.em:4:5: error: returned value's type does not match the function's return type

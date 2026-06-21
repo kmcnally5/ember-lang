@@ -1,0 +1,3 @@
+panel-a: count=-1 title=GONE open=false scroll=-1
+panel-ab: count=42
+panel-b: count=9 title=Bravo

@@ -1,0 +1,3595 @@
+# Ember by Firelight
+
+### A friendly, honest field guide to writing Ember — as it actually stands today
+
+*Covering the language as built and tested in June 2026. Everything in this book was compiled and run before it was written down. Nothing here is aspirational.*
+
+---
+
+> **The one promise this book makes**
+>
+> Ember is a young language in active design, and it is growing quickly. A book about a
+> moving target can lie to you in two directions: by describing features that don't exist
+> yet, or by going stale the moment something lands. This book solves the first problem
+> ruthlessly — **every single code sample was run through the compiler and produced the
+> output shown** — and it makes peace with the second by telling you, at every turn, exactly
+> where the edges are. When something is designed but not built, you'll find it in
+> [Chapter 23: The "Not Yet" List](#chapter-23--the-not-yet-list), clearly fenced off, and
+> nowhere else.
+>
+> If you can read one programming language already — any of them — you can learn to write
+> working Ember from this book. That includes you, dear reader, even if your last program
+> ended in a stack trace you emailed to a friend.
+
+---
+
+## How to read this book
+
+You don't have to read it cover to cover, but the early chapters genuinely build on each
+other, so if you're new, start at the start. Each chapter follows the same rhythm: a plain
+explanation, real code you can run, the gotcha that will bite you if nobody warns you, and —
+because all work and no play makes for a dull manual — the occasional **Fireside trivia**
+box, where we wander off to look at something faintly ridiculous and true.
+
+A few conventions:
+
+- Code you can run looks like this and has been run:
+
+  ```ember
+  fn main() -> int {
+      println("Hello from Ember")
+      return 0
+  }
+  ```
+
+- When the compiler says something back to you, it looks like this:
+
+  ```
+  => 0
+  ```
+
+> **Fireside trivia.** Ember's reference compiler is written in C — about a dozen thousand
+> lines of it — and has *no third-party dependencies at all* for its default build. It links
+> the C standard library and nothing else. The entire toolchain (compiler, language server,
+> property fuzzer, contract prover, JSON reader) is written in-tree. The one exception is
+> the optional graphics build, which is kept so firmly off the main path that you can build
+> and test the whole language on a machine with no display.
+
+---
+
+## Running Ember at all
+
+Ember programs end in `.em`. You compile and run one with the `emberc` compiler:
+
+```
+emberc --emit=run hello.em
+```
+
+That compiles the program *and* executes it, printing any output, then a final line showing
+the value `main` returned:
+
+```
+=> 0
+```
+
+`--emit=run` is the one you'll use most. The compiler can do a lot of other things to your
+program — show you the tokens, the syntax tree, the bytecode, fuzz your contracts, prove
+them, replay a run deterministically — and all of those live in
+[Chapter 21: The Whole Toolbox](#chapter-21--the-whole-toolbox). It can also compile your program
+to a **standalone native binary**, with no interpreter anywhere in sight — that's
+[Chapter 22: Compiling to Native](#chapter-22--compiling-to-native). For now, `--emit=run` is all
+you need.
+
+Exit codes, if you script things: `0` success, `64` you used the compiler wrong, `65` your
+program has an error (lexing, parsing, type-checking, *or* a runtime fault), `66` the file
+couldn't be read.
+
+---
+
+## Building Ember from source
+
+The samples above assume you already have an `emberc`. Producing one is deliberately dull:
+Ember's compiler is written in C with **no third-party dependencies**, so on any machine with a
+C compiler and `make`, a single command does it.
+
+```
+make
+```
+
+That builds the everyday compiler at `build/emberc` — a debuggable `-O0 -g` build — together with
+the small runtime libraries that native binaries link against. To confirm everything actually
+works, run the regression suite, which rebuilds whatever is stale and then runs every example in
+this book:
+
+```
+make test
+```
+
+Those two are ninety per cent of what you'll ever type. Everything else the `Makefile` can do is
+below, grouped by why you'd reach for it.
+
+**Building the compiler**
+
+| Target | Produces | Notes |
+|--------|----------|-------|
+| `make` (`make all`) | `build/emberc` + `libember_rt.a`, `libember_rt_par.a` | The dev build: `-O0 -g`, quick to rebuild and debuggable. The two `.a` files are the runtime `emberc -o` links into native programs. |
+| `make release` | `build/emberc-release` | The optimized `-O2` compiler — the one `make install` ships. |
+| `make parallel` | `build/emberc-par` | Same language, multicore runtime: `spawn`/`nursery`/channels run on real OS threads ([Chapter 14](#chapter-14--concurrency)). |
+| `make graphics` | `build/emberc-gfx` | Links raylib + FreeType. *Needs an external library* (see below). |
+| `make net` | `build/emberc-net` | Links libcurl for HTTPS. *Needs an external library.* |
+| `make net-graphics` | `build/emberc-net-gfx` | Networking + graphics + threads at once — the build the desktop demo uses. *Needs both libraries.* |
+
+**Finding bugs**
+
+| Target | Produces | Notes |
+|--------|----------|-------|
+| `make asan` | `build/emberc-asan` | AddressSanitizer build — running a `.em` program flags use-after-free / overflow with a stack trace. |
+| `make asan-par` | `build/emberc-asan-par` | The same, exercising the cross-thread (parallel) paths. |
+| `make asan-trace` | `build/emberc-trace` | ASan plus the double-drop detector — the "memory tape" of [Chapter 19](#chapter-19--the-tape-and-errors-as-data). |
+
+**Testing, and the three gates**
+
+| Target | What it does |
+|--------|--------------|
+| `make test` | The regression suite: builds everything, checks the editor grammar is in sync, runs every example. |
+| `make test-update` | Regenerate the snapshot goldens. Review the diff before you trust it. |
+| `make test-lsp` | Language-server regression (the editor integration). |
+| `make test-graphics` | Graphics/UI regression. Needs raylib and a display. |
+| `make test-parallel` | Correctness suite for programs that are only correct under the multicore runtime. |
+| `make crucible` | The memory-ownership **fuzzer** — generates danger-zone programs and runs each through five oracles ([Chapter 20](#chapter-20--crucible-the-memory-fuzzer)). |
+| `make ceilings` | The compiler-**limits** stress tester: pushes constants, locals, fields and the rest past the 256 boundary to prove nothing silently wraps. |
+| `make opcheck` | *(new)* The bytecode **operand-layer** gate — proves the encoder, decoder, disassembler and VM all agree on every opcode's operand widths, so they can't drift apart. |
+
+**Benchmarks**
+
+| Target | What it does |
+|--------|--------------|
+| `make bench` | Build the release compiler, then run and time every program in `benchmarks/`. |
+| `make parbench` | Run the concurrency suite under both the serial and parallel compilers and tabulate the speedup. |
+
+**Editors, installing, cleaning**
+
+| Target | What it does |
+|--------|--------------|
+| `make gen-editor-assets` | Regenerate the VS Code syntax grammar from the single source of truth, `include/vocab.def`. |
+| `make install` | Build release, then install `emberc` + the standard library to `~/.ember` (override with `PREFIX=`) so editors and tools find it from any folder. |
+| `make install-vscode` | Package and install the VS Code extension globally. Needs Node/npm and VS Code. |
+| `make clean` | Delete `build/`. |
+
+> **The three gates, and why they exist.** `crucible`, `ceilings` and `opcheck` are siblings, each
+> guarding one recurring class of *compiler* bug. Crucible hunts memory-ownership mistakes; ceilings
+> hunts narrow operands that wrap past 255; and the newest, **`opcheck`**, hunts operand-layout
+> *drift* — the bug where the code that writes an instruction and the code that reads it quietly
+> disagree on how many bytes it occupies. It works in two halves: a codec round-trip that encodes and
+> decodes every operand kind, and a special `-DEMBER_OPCHECK` build of the VM that, after every
+> instruction across the whole test corpus, asserts the handler consumed *exactly* the bytes the
+> opcode's spec declared. Run it after touching any opcode.
+
+**A note on dependencies.** `make`, `make test`, all three gates, the sanitizers and the benchmarks
+need nothing but a C compiler — that is the whole point of writing the compiler in C. Only three
+targets reach outside the standard library: `graphics` (and `test-graphics`) want raylib + FreeType,
+found via `pkg-config`; `net` wants libcurl, via `curl-config`; and `net-graphics` wants both.
+`make install-vscode` additionally needs Node/npm and VS Code. The default path stays
+dependency-free and display-free, so you can build and test the entire language on a headless
+machine.
+
+---
+
+# Index
+
+**Part I — First Light**
+- [Chapter 1 — Hello, Ember](#chapter-1--hello-ember)
+- [Chapter 2 — Values and Bindings](#chapter-2--values-and-bindings)
+- [Chapter 3 — Numbers, Text, and Truth](#chapter-3--numbers-text-and-truth)
+
+**Part II — Building Things**
+- [Chapter 4 — Functions](#chapter-4--functions)
+- [Chapter 5 — Control Flow](#chapter-5--control-flow)
+- [Chapter 6 — Arrays and Iteration](#chapter-6--arrays-and-iteration)
+- [Chapter 7 — Structs and Methods](#chapter-7--structs-and-methods)
+- [Chapter 8 — Enums and Pattern Matching](#chapter-8--enums-and-pattern-matching)
+
+**Part III — Bigger Ideas**
+- [Chapter 9 — Errors and Optionals](#chapter-9--errors-and-optionals)
+- [Chapter 10 — Generics and Interfaces](#chapter-10--generics-and-interfaces)
+- [Chapter 11 — Functions as Values, and Closures](#chapter-11--functions-as-values-and-closures)
+- [Chapter 12 — Ownership Without Tears](#chapter-12--ownership-without-tears)
+- [Chapter 13 — Memory, the Quiet Way](#chapter-13--memory-the-quiet-way)
+- [Chapter 14 — Concurrency](#chapter-14--concurrency)
+- [Chapter 15 — Modules and the Standard Library](#chapter-15--modules-and-the-standard-library)
+- [Chapter 16 — Talking to C](#chapter-16--talking-to-c)
+
+**Part IV — Knowing You're Right**
+- [Chapter 17 — Contracts](#chapter-17--contracts)
+- [Chapter 18 — The Verification Loop](#chapter-18--the-verification-loop)
+- [Chapter 19 — The Tape, and Errors as Data](#chapter-19--the-tape-and-errors-as-data)
+- [Chapter 20 — Crucible: The Memory Fuzzer](#chapter-20--crucible-the-memory-fuzzer)
+
+**Part V — Reference**
+- [Chapter 21 — The Whole Toolbox](#chapter-21--the-whole-toolbox)
+- [Chapter 22 — Compiling to Native](#chapter-22--compiling-to-native)
+- [Chapter 23 — The "Not Yet" List](#chapter-23--the-not-yet-list)
+- [Chapter 24 — One-Page Cheat Sheet](#chapter-24--one-page-cheat-sheet)
+
+**Part VI — Things People See**
+- [Chapter 25 — Flare: Interfaces You Can Read](#chapter-25--flare-interfaces-you-can-read)
+
+- [Appendix A — Glossary](#appendix-a--glossary)
+- [Colophon](#colophon)
+
+---
+
+# Part I — First Light
+
+## Chapter 1 — Hello, Ember
+
+Here is a complete, working Ember program. Not a fragment, not "imagine the rest" — the whole
+thing.
+
+```ember
+fn main() {
+    let name = "Ember"
+    let year = 2026
+    println("Hello from {name}, {year}.")
+}
+```
+
+Run it:
+
+```
+emberc --emit=run hello.em
+```
+
+and Ember says:
+
+```
+Hello from Ember, 2026.
+=> 0
+```
+
+Let's take that apart, because almost everything you need for the next ten chapters is hiding
+in those four lines.
+
+**`fn main()` is where it begins.** A program is a collection of functions, and execution
+starts at the one called `main`. The `fn` keyword introduces a function; the empty `()` means
+it takes no arguments. We didn't write a return type, and that's allowed for `main` — it
+quietly returns `0`, which is the `=> 0` you saw at the end.
+
+**`let name = "Ember"` binds a name to a value.** We didn't say `name` is a string; Ember
+worked it out. More on `let` (and its mutable sibling `var`) in the next chapter.
+
+**`println(...)` prints a line.** There's also `print`, which doesn't add the newline. Both
+are built into the language — you don't import anything to get them.
+
+**`"Hello from {name}, {year}."` is an interpolated string.** Anything inside `{ }` is an
+expression that gets computed and slotted into the text. Every string in Ember can interpolate;
+there's no special prefix to opt in.
+
+### A function with a job
+
+`main` calling `println` is fine, but functions earn their keep by taking input and returning
+output. Here's one that adds two integers:
+
+```ember
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+fn main() -> int {
+    return add(20, 22)
+}
+```
+
+```
+=> 42
+```
+
+Two new things. First, **function parameters must have types** — `a: int, b: int`. Ember will
+happily infer the type of a local `let`, but at the boundary of a function it insists you
+spell things out. That boundary is a contract between the caller and the callee, and it's
+exactly where being explicit pays off (for you, for the next person, and — as we'll see — for
+the machine). Second, **`-> int` declares the return type**. Here `main` returns an `int` too,
+so its result `42` shows up as `=> 42`.
+
+### Comments, and the comment that becomes documentation
+
+Ordinary comments run from `//` to the end of the line. There are no block comments; Ember
+doesn't have them, and after a while you won't miss them.
+
+```ember
+// This is a comment. It explains the line below.
+let tau = 6   // comments can sit at the end of a line, too
+```
+
+But three slashes — `///` — make a **doc comment**, and those are special. Placed on the
+line(s) just above a declaration, they *document* it, and Ember can render them two ways from
+the one source: the editor shows them when you hover, and `emberc --emit=docs` turns them into
+a Markdown page. Write the explanation once; get the tooltip and the manual for free.
+
+```ember
+/// A point on the plane.
+/// Copied by value.
+struct Point {
+    /// The horizontal coordinate.
+    x: int
+    y: int
+}
+```
+
+Four or more slashes (`////`) are just an ordinary comment again. Ember reserves exactly three
+for documentation, which is a pleasingly specific decision.
+
+### No semicolons
+
+You may have noticed the lack of semicolons. This is not an oversight. **Ember has no
+statement terminator; a newline ends a statement** — but only when the line could sensibly
+end there. If a line ends on something that obviously wants more (a `+`, a comma, an open
+bracket, an `=`), Ember knows you're mid-thought and reads on:
+
+```ember
+let total = 1 +     // the trailing '+' means "more coming" — the line continues
+            2 +
+            3
+```
+
+The rule of thumb that will keep you out of trouble: **break after an operator, never before
+it.** Put the `+` at the end of the line, not the start of the next one. Do that and you'll
+never think about this again.
+
+> **Fireside trivia.** Languages disagree fiercely about semicolons. C demands them. Python
+> banned them. Go made them optional by having the *lexer* secretly insert them at line
+> breaks — and Ember does essentially the same trick, emitting an invisible terminator only
+> after a token that can legally end a statement. So the semicolons are still there, in a
+> sense. They've just gone into hiding and taken your shift-key's workload with them.
+
+---
+
+## Chapter 2 — Values and Bindings
+
+A binding gives a name to a value. Ember has two keywords for it, and the entire difference
+between them is whether you're allowed to change your mind later.
+
+```ember
+let name = "Ember"   // immutable: this name will always mean "Ember"
+var count = 0        // mutable: this one can change
+count = count + 1    // ...like so
+```
+
+`let` is **immutable**. Once bound, it stays bound. `var` is **mutable**; you can reassign it
+as often as you like. Two short words, one each, no modifiers to forget.
+
+If you try to reassign a `let`, the compiler stops you — and, importantly, it tells you
+exactly how to fix it:
+
+```ember
+let a = 5
+a = 6
+```
+
+```
+error: cannot assign to an immutable 'let' binding; declare it with 'var'
+```
+
+This is a theme you'll see again and again: **Ember's error messages are written to be
+read.** They name your problem in the words of your program and, where they can, tell you the
+move that fixes it. The compiler is trying to be a teacher, not a bouncer.
+
+### Types are optional here (but allowed)
+
+Locals infer their type from the value, so you rarely annotate them. When you want to be
+explicit — for clarity, or to pin down a specific numeric width — you can:
+
+```ember
+let year: int = 2026
+let pi: float = 3.14159
+```
+
+A small, tidy detail: a binding's right-hand side is worked out *before* the new name exists.
+So this does what you'd hope:
+
+```ember
+let a = 10
+let a = a + 1   // the 'a' on the right is the old 'a' (10); the new 'a' is 11
+```
+
+The second `a` **shadows** the first. The new binding reuses the name, and the old value is
+referred to one last time on the way in. This is legal and often handy — refining a value
+through a short pipeline of `let`s without inventing `a1`, `a2`, `a3`.
+
+### Constants: a `let` at the top level
+
+A `let` written at the top of a file, outside any function, is a **module constant** — a
+named value fixed at compile time:
+
+```ember
+let WIDTH = 800
+let TITLE = "Ember"
+
+fn main() -> int {
+    println(TITLE)
+    return WIDTH
+}
+```
+
+```
+Ember
+=> 800
+```
+
+Constants must be initialised with a literal — a number, a string, `true`/`false`, or a
+negative number. You can't yet write `let x = some_function()` at the top level; general
+mutable globals aren't a thing in Ember today, and honestly they're a misfeature you'll not
+miss. Constants cost nothing at runtime: each use is substituted with the value directly. They
+also make excellent colours, key codes, size limits, and configuration knobs.
+
+> **Fireside trivia.** "Immutable by default" sounds like a modern fad, but it's closer to a
+> return to manners. The earliest functional languages treated reassignment as the unusual,
+> slightly suspicious operation. Decades of C-family languages then made `x = 5` so cheap and
+> so default that we forgot it was a choice. Ember is quietly siding with the old guard: you
+> *can* change a value, but you have to look it in the eye and type `var` first.
+
+---
+
+## Chapter 3 — Numbers, Text, and Truth
+
+Three kinds of value will carry most of your programs: numbers, strings, and booleans. Ember
+has firm opinions about all three, and the opinions are mostly "be explicit, and don't let
+anything happen behind your back."
+
+### Numbers
+
+For everyday work there are two number types:
+
+- **`int`** — a 64-bit signed integer. (It's an alias for `i64`.)
+- **`float`** — a 64-bit floating-point number. (An alias for `f64`.)
+
+Use those by default. When you genuinely care about width — packing bytes, matching a file
+format, squeezing memory — the full family is there: `i8 i16 i32 i64`, `u8 u16 u32 u64`, and
+`f32 f64`. Each is a distinct type.
+
+```ember
+let n = 42          // int
+let big: i64 = 42   // the same thing, spelled out
+let small: u8 = 200 // an 8-bit unsigned byte
+let x = 200u8       // or pin the width with a suffix
+```
+
+Two rules will save you a great deal of confusion:
+
+**1. There is no implicit coercion.** Ember will never quietly turn an `i32` into an `i64`, or
+an `int` into a `float`, to make an expression type-check. Mixing them is an error you must
+resolve on purpose:
+
+```ember
+let bad = 1 + 2.0   // error: you can't add an int and a float
+```
+
+To cross between types you convert explicitly. Integer widths convert with a type-name call —
+`u8(x)`, `i32(x)`, `i64(x)` — which is *range-checked* and traps if the value won't fit.
+Between integers and floats you use `to_float` and `to_int` (the latter truncates toward
+zero):
+
+```ember
+let a: int = 7
+let b: float = to_float(a)   // 7.0
+let c: int = to_int(3.9)     // 3
+let d: u8 = u8(200)          // fine; u8(300) would trap at runtime
+```
+
+There's a neat split worth knowing: an out-of-range *literal* is caught at **compile time** —
+`let x: u8 = 300` simply won't build (*"integer literal is out of range for its type"*) — while
+an out-of-range *conversion* like `u8(300)` is a **runtime** trap. The compiler catches what it
+can see at compile time; the runtime guards the rest.
+
+**2. Overflow traps; it does not wrap.** If an integer calculation overflows its width, the
+program stops with a clear runtime error rather than silently rolling over to a wrong answer:
+
+```ember
+fn main() -> int {
+    var x = 200u8
+    x = x + 100u8    // 300 doesn't fit in a u8
+    return 0
+}
+```
+
+```
+emberc: runtime error: integer overflow
+```
+
+This is a deliberate safety choice. A silent wrap is one of the great sources of
+catastrophic, hard-to-find bugs; Ember would rather halt and tell you. (Floating-point follows
+the usual IEEE-754 rules — dividing by zero gives infinity, not a trap.)
+
+One small display quirk worth knowing now, so it doesn't startle you later: **a `float` that
+happens to be a whole number prints without a trailing `.0`.** A distance of five prints as
+`5`, not `5.0`. It's still a `float` under the hood; it just doesn't show off about it.
+
+### Strings
+
+A string is text in double quotes. The familiar escapes work — `\n`, `\t`, `\r`, `\\`, `\"` —
+and to write a literal brace (so it isn't read as interpolation) you escape it: `\{` and `\}`.
+
+`+` joins strings, and `==` / `!=` compare them *by content*, not by identity — two strings
+that spell the same thing are equal:
+
+```ember
+let greeting = "Hello, " + "world"
+let same = ("ab" == "a" + "b")   // true
+```
+
+Strings carry a handful of built-in methods. Ember strings are **UTF-8** — multi-byte Unicode
+characters are fully supported. Most methods operate in *bytes* (fast, ASCII-safe), and a separate
+family of `cp_*` functions lets you work in *code points* when you need Unicode-correct behaviour:
+
+- `s.len()` — the number of **bytes** (not code points; they differ for non-ASCII text).
+- `s.chars()` — an array of strings, one per **code point** (not per byte).
+- `s.bytes()` — an array of `u8` values, one per byte.
+- `s.char_count()` — the number of Unicode code points.
+- `s.split(sep)` — split into an array of strings on a separator.
+- `s.parse_int()` — try to read the string as an integer; gives back `Some(n)` or `None` (see
+  [Chapter 9](#chapter-9--errors-and-optionals)).
+
+For Unicode-correct editing and slicing, the `cp_*` builtins index by code point:
+`cp_count(s)`, `cp_at(s, i)`, `cp_slice(s, start, end)`, `cp_prefix(s, n)`,
+`cp_insert(s, idx, ins)`, `cp_delete(s, idx)`.
+
+```ember
+fn main() -> int {
+    let parts = "12,34,56".split(",")
+    println("{parts.len()} parts")     // 3 parts
+    match parts[0].parse_int() {
+        case Some(n) { println("first is {n}") }   // first is 12
+        case None    { println("not a number") }
+    }
+    return 0
+}
+```
+
+There's a fuller set of string operations — `trim`, `to_upper`, `contains`, `replace`,
+`join`, and friends — but those live in the standard library and arrive in
+[Chapter 15](#chapter-15--modules-and-the-standard-library). The four above are baked into the
+language itself.
+
+> **A gotcha worth the ink.** Building a big string by repeatedly doing `out = out + piece`
+> in a loop is quadratic — each `+` copies everything so far, because strings are immutable.
+> For a handful of pieces, who cares. For thousands, collect them in an array and join once.
+> The standard library's string builders do exactly this. Immutability is a lovely property
+> right up until you fight it in a hot loop.
+
+### Truth
+
+`bool` is its own type, with exactly two values, `true` and `false`. It is **not** a number,
+and this matters more than it sounds:
+
+```ember
+fn main() -> int {
+    if 1 { return 1 }   // nope
+    return 0
+}
+```
+
+```
+error: 'if' condition must be a bool
+```
+
+**There is no "truthiness" in Ember.** `1` is not "truthy," `0` is not "falsy," the empty
+string is just a string. A condition must be an actual `bool`. This feels strict for about a
+day and then feels like a handrail for the rest of your life — a whole category of "oops, that
+was zero" bugs simply cannot be written.
+
+The logical operators are `&&` (and), `||` (or), and `!` (not). `&&` and `||` short-circuit,
+just as you'd expect: the right side isn't evaluated if the left already decides the answer.
+
+### Working at the bit level
+
+When you want to manipulate the actual bits of an integer — packing flags, masking, hashing,
+writing a codec — Ember has the full set of bitwise operators: `&` (and), `|` (or), `^` (xor),
+`~` (not), and the shifts `<<` and `>>`. These are **integer-only and width-aware**: they refuse
+floats, and they respect the type's width, so `~` on a `u8` flips eight bits, not sixty-four.
+
+```ember
+fn main() -> int {
+    let a: u8 = 6          // 0000 0110
+    let b: u8 = 3          // 0000 0011
+    println("and  {a & b}")   // 2   — bits set in both
+    println("or   {a | b}")   // 7   — bits set in either
+    println("xor  {a ^ b}")   // 5   — bits set in exactly one
+    println("shl  {a << 1}")  // 12  — shifted left one place
+    println("shr  {a >> 1}")  // 3   — shifted right one place
+    println("not  {~b}")      // 252 — every bit of a u8 flipped
+    return 0
+}
+```
+
+```
+and  2
+or   7
+xor  5
+shl  12
+shr  3
+not  252
+=> 0
+```
+
+Two details that keep shifts honest. The shift *amount* must land in `[0, width)` — shifting a
+`u8` by 8 or more is a runtime trap, not a quiet zero — and `>>` is **arithmetic** (sign-preserving)
+on signed types but **logical** (zero-filling) on unsigned ones, so a negative `i32 >> 1` stays
+negative while a `u32 >> 1` always pulls in zeros. The shipped `examples/12_bits.em` puts all this
+to work twice over: a complete xorshift PRNG built from nothing but `<<`, `>>`, and `^`, and a set
+of Unix-style permission flags packed into a single byte and toggled with masks.
+
+> **A built-in safety.** `&` is bits and `&&` is logic, and the two never overlap — bitwise
+> operators are never defined on `bool` — so the classic slip of writing `&` when you meant `&&`
+> can't quietly compile. The overflow discipline from earlier in this chapter applies here too:
+> shifts are range-checked, and arithmetic traps rather than wrapping.
+
+> **When you actually want wrap-around.** Trapping on overflow is the right default, but a whole
+> family of primitives — non-cryptographic hashes like FNV-1a and MurmurHash, multiply-mixing PRNGs
+> like PCG — *depend* on integer arithmetic wrapping round at the type's width. So Ember gives you
+> exactly that, explicitly, through three builtins: `wrapping_add`, `wrapping_sub`, and
+> `wrapping_mul` each take two integers of one width and compute modulo 2ʷ with no trap (there's no
+> wrapping `/` or `%` — overflow there isn't a real thing). It's the same philosophy as `move`: the
+> dangerous-looking operation is available, but you have to *name* it, so nobody — and no model —
+> reaches for silent wraparound by accident. With it, a real FNV-1a hash is a six-line loop in pure
+> Ember; without it you'd be back in C. (Shift-and-xor designs like xorshift never overflow at all,
+> so they need none of this — `examples/12_bits.em` stays library-free.)
+
+### The precedence table, once, so you never wonder
+
+From loosest-binding to tightest, all binary operators grouping left-to-right:
+
+| Tightness | Operators |
+|-----------|-----------|
+| loosest   | `\|\|` |
+|           | `&&` |
+|           | `\|` (bitwise or) |
+|           | `^` (bitwise xor) |
+|           | `&` (bitwise and) |
+|           | `==`  `!=` |
+|           | `<`  `<=`  `>`  `>=` |
+|           | `<<`  `>>` (shift) |
+|           | `+`  `-` |
+| tightest  | `*`  `/`  `%` |
+
+Prefix `!`, unary `-`, and `~` (bitwise not) bind tighter than all of those; the postfix forms
+(calling a function `f(...)`, reaching into a value `a.b`, indexing `a[i]`, and the `?` operator)
+bind tightest of all. When in doubt, parenthesise — it's free and it's kind to the next reader.
+
+This mirrors C exactly, which means it inherits C's one genuinely surprising row: the bitwise
+operators bind *looser* than the comparisons, so `a & b == c` parses as `a & (b == c)`, almost
+never what you meant. The fix is the same as in C — parenthesise mixed bitwise-and-comparison
+expressions — and Ember's strict typing tends to catch the rest, since `b == c` is a `bool` and
+`&` wants integers.
+
+> **Fireside trivia.** The `%` operator is "remainder," and it insists on integer operands —
+> no `%` on floats. The percent sign for "modulo" is one of computing's odder inheritances: it
+> has nothing to do with percentages. It was chosen in early languages mostly because it was a
+> spare symbol on the keyboard that wasn't doing anything else. Half of programming syntax is
+> just whatever punctuation happened to be unemployed at the time.
+
+---
+
+# Part II — Building Things
+
+## Chapter 4 — Functions
+
+You've already met functions; let's make the relationship official.
+
+```ember
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+fn fib(n: int) -> int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)   // recursion is welcome
+}
+
+fn main() -> int {
+    return add(fib(10), 1)           // => 56
+}
+```
+
+The shape is `fn name(params) -> ReturnType { body }`. A few firm rules:
+
+- **Parameter types are mandatory.** No inference at the boundary.
+- **Parameters are immutable.** Inside the function, a parameter behaves like a `let` — you
+  can read it all you like, but you can't reassign it. If you want a mutable working copy,
+  make one with `var`.
+- **Arguments are checked for count and type**, with no coercion. Call `add(fib(10), 1)` and
+  Ember confirms you passed exactly two `int`s.
+- **Order doesn't matter.** `fib` can call itself, and any function can call any other
+  function defined anywhere in the file. Ember reads all the signatures first, then checks the
+  bodies, so forward references and mutual recursion Just Work — no forward declarations, no
+  header files.
+
+### Functions that return nothing
+
+If you leave off the `-> T`, you've written a **unit function** — one that runs for its effect
+and produces no value:
+
+```ember
+fn greet(name: string) {
+    println("Hello, {name}")
+    return            // a bare 'return' is fine; so is just falling off the end
+}
+
+fn main() {
+    greet("Ember")
+}
+```
+
+Inside a unit function, a bare `return` (with no value) bails out early, and reaching the
+closing brace returns nothing at all. What you *can't* do is return a value from one
+(`return 5` in a unit function is an error), and you can't capture its non-existent result:
+
+```ember
+let x = greet("Ember")   // error: there's no value here to bind
+```
+
+This is the same principle as the strict `bool`: Ember won't let you pretend a nothing is a
+something. `main` is allowed to be a unit function too — as you saw in Chapter 1, it then
+quietly hands back `0`.
+
+> **Fireside trivia.** The word "unit" comes from type theory, where the type with exactly
+> one value is called the *unit type*. A function that "returns nothing" actually returns that
+> single, contentless value — there's nothing to choose, so there's nothing to say. "Void"
+> and "unit" are the same idea wearing different hats: one borrowed from C's bookkeeping, the
+> other from mathematics' tidy bookkeeping.
+
+---
+
+## Chapter 5 — Control Flow
+
+This is the chapter where programs start making decisions and going round in circles, which is
+most of what programs do.
+
+### `if` / `else`
+
+```ember
+fn classify(n: int) -> int {
+    if n < 0 {
+        return -1
+    } else if n == 0 {
+        return 0
+    } else {
+        return 1
+    }
+}
+```
+
+Braces are always required — there's no "one-liner without braces" form to trip over. The
+condition must be a `bool` (we covered why in Chapter 3: no truthiness, ever). `else if`
+chains as far as you need.
+
+### `loop`, `break`, `continue`
+
+Ember's one looping primitive is `loop`, which loops forever until you `break` out of it.
+`continue` skips to the next turn.
+
+```ember
+fn sum_to(n: int) -> int {
+    var i = 0
+    var total = 0
+    loop {
+        if i >= n { break }
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+```
+
+`break` and `continue` are only legal inside a loop; using them anywhere else is a compile
+error. You might be looking at that `loop` and thinking "where's `while`? where's the C-style
+`for`?" — and the answer is the next chapter, which has a much nicer `for`. For counting and
+walking over data you'll reach for that; `loop` is for the genuinely open-ended cases.
+
+### Blocks and scope
+
+Every `{ }` is a scope. A `let` or `var` declared inside one lives until that block's closing
+brace and no longer — `if`, `else`, `loop`, and even a bare `{ }` you write yourself all
+create a fresh scope. And, as we saw with bindings, an inner name may **shadow** an outer one:
+
+```ember
+fn main() -> int {
+    let x = 1
+    {
+        let x = 99      // a different x, just for this block
+        println("{x}")  // 99
+    }
+    println("{x}")      // 1 — the outer x was never touched
+    return x
+}
+```
+
+This is exactly the block scoping you know from C-family languages, with no surprises. The
+shadowing is the one thing C# doesn't let you do (it forbids a local shadowing another local);
+Ember permits it, because it's genuinely useful for refining a value step by step, and the
+strict immutability of `let` keeps it from being confusing.
+
+---
+
+## Chapter 6 — Arrays and Iteration
+
+An array is a growable, in-order sequence of values that all share one type. Written `[T]` —
+so `[int]` is an array of ints, `[string]` an array of strings.
+
+```ember
+fn main() -> int {
+    let xs = [10, 20, 30]
+    println("{xs[0]}")        // 10  — index from zero
+    println("{xs.len()}")     // 3   — how many
+    return xs[2]              // 30
+}
+```
+
+Indexing is **bounds-checked**: reach past the end and the program stops with a runtime error
+rather than reading rubbish. Every element must be the same type; an empty literal `[]` takes
+its type from context (`let a: [int] = []`).
+
+### Growing and shrinking
+
+Through a *mutable* place (a `var`, or a `mut` parameter — Chapter 12 has the full story),
+arrays grow and change in place:
+
+```ember
+fn main() -> int {
+    var a: [int] = []
+    a.append(1)               // grow by one (amortised O(1))
+    a.append(2)
+    a.append(3)
+    a[0] = 10                 // assign to an element
+    let last = a.remove_last() // takes the last element off and hands it back: 3
+    return a[0] + a.len() + last  // 10 + 2 + 3 = 15
+}
+```
+
+The core array methods are `append(x)` (grow by one), `remove_last()` (take the last element
+off and hand it back — a runtime error if the array is empty), `remove_at(i)` (remove and
+return the element at index `i`, shifting the rest down — a runtime error if `i` is out of
+range), and `len()`. The free function `len(a)` works too if you prefer. Reading and indexing
+don't need a mutable place; growing, removing, and assigning do.
+
+### Walking over things: `for ... in`
+
+`for x in collection` binds each element in turn:
+
+```ember
+fn main() -> int {
+    let xs = [10, 20, 30]
+    var sum = 0
+    for x in xs {
+        if x == 20 { continue }   // skip the 20
+        sum = sum + x             // 10 + 30
+    }
+    return sum + len(xs)          // 40 + 3 = 43
+}
+```
+
+`for` also walks an **integer range** written `lo..hi`. The range is *exclusive* of the top,
+so `0..n` gives you `0, 1, ..., n-1` — exactly the indices of an `n`-element array, which is
+not a coincidence:
+
+```ember
+var sum = 0
+for i in 0..10 { sum = sum + i }   // 0+1+...+9 = 45
+```
+
+A range that's empty or backwards (`5..5`, or `9..3`) simply runs zero times, no drama.
+
+And when you want both the position *and* the element, there's a form for that:
+
+```ember
+let names = ["ada", "alan", "grace"]
+for (i, name) in names {
+    println("{i}: {name}")
+}
+```
+
+```
+0: ada
+1: alan
+2: grace
+```
+
+That's the whole iteration story, and it's deliberately small: `for x in a` for elements,
+`for i in a..b` for a counter, `for (i, x) in a` for both. Three forms, three distinct jobs,
+no overlap. There's exactly one range operator (`..`, exclusive) on purpose — an inclusive
+version would just be a second way to write `lo..hi+1`, and Ember dislikes having two ways to
+say one thing.
+
+> **A small performance note you can mostly ignore.** The `for` forms aren't just tidier than
+> a hand-rolled `loop` with a counter — they're faster, because each compiles down to a single
+> fused machine step (increment, bounds-check, and for arrays the element fetch, all at once)
+> instead of the dozen-odd instructions a manual counter spends per turn. The idiomatic form is
+> also the quick one.
+
+One thing you *can't* do: a range only exists as something to iterate. `let r = 0..5` on its
+own is an error — ranges aren't first-class values, just a way to drive a `for`.
+
+### Slices: a borrowed window, no copy
+
+`arr[lo..hi]` is a **slice** — a read-only view into part of an array, from `lo` (inclusive) to
+`hi` (exclusive), made with **no copying at all**. Its type is `Slice<T>`, and you treat it like
+an array: index it, ask its `len()`, walk it with `for`, even slice it again.
+
+```ember
+fn sum(xs: Slice<int>) -> int {
+    var t = 0
+    for x in xs { t = t + x }
+    return t
+}
+
+fn main() -> int {
+    let data = [10, 20, 30, 40, 50]
+    let win = data[1..4]              // a view of [20, 30, 40] — nothing allocated
+    let mid = win[1..2]               // a slice of a slice → [30]
+    return sum(win) + mid[0]          // 90 + 30 => 120
+}
+```
+
+```
+=> 120
+```
+
+A slice *borrows* the array it looks into, and the compiler keeps that honest the same way it
+does everywhere else. While a slice is alive its source array is **frozen** — you can't
+`append` to it, reassign it, or move it, since that could pull the ground out from under the
+view — and a slice **can't escape**: it may be a parameter or a local, but never a return value,
+a struct field, or an array element. When you genuinely need to *keep* a sub-array, reach for
+the copying companion **`arr.slice(lo, hi)`**, which hands back a fresh, owned `[T]` you can
+store or return.
+
+### `.clone()`: an explicit deep copy
+
+Because arrays and structs are uniquely owned (Chapter 12 has the full story), the compiler
+won't let you quietly make a second owner of one. Reading a struct straight *out* of an array
+element to stash elsewhere is a compile error, in fact — a shallow copy would alias the
+element's heap fields and free them twice. When you genuinely want an independent copy, ask for
+one out loud with `.clone()`:
+
+```ember
+fn main() -> int {
+    var nums = [1, 2, 3]
+    var copy = nums.clone()           // an independent deep copy
+    copy.append(4)
+    return nums.len() + copy.len()    // 3 + 4 => 7  (nums itself is untouched)
+}
+```
+
+```
+=> 7
+```
+
+`x.clone()` copies recursively — array elements, struct fields, and everything they own — so
+changing the clone never reaches the original, and vice versa. It works on arrays and on structs,
+including the generic ones like `Map<K, V>` and `Set<K>`. The cost is always **visible at the
+call site**; Ember never deep-copies a value behind your back.
+
+> **Fireside trivia.** "Off-by-one errors are the two hardest problems in computer science."
+> The exclusive-end range is the industry's hard-won answer to half of them: when the top is
+> exclusive, the length of `0..n` is just `n`, two adjacent ranges `0..k` and `k..n` meet
+> perfectly with no overlap or gap, and you almost never write `<=` by mistake. Dijkstra wrote
+> an entire note in 1982 arguing for exactly this convention. Ember simply makes it the only
+> option and saves you the argument.
+
+---
+
+## Chapter 7 — Structs and Methods
+
+A `struct` bundles several named, typed fields into one value.
+
+```ember
+struct Point {
+    x: float
+    y: float
+
+    fn distance(self, other: Point) -> float {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        return sqrt(dx * dx + dy * dy)
+    }
+}
+
+fn main() -> int {
+    let a = Point { x: 0.0, y: 0.0 }
+    let b = Point { x: 3.0, y: 4.0 }
+    println("{a.distance(b)}")    // 5
+    return 0
+}
+```
+
+You **construct** a struct with `Type { field: value, ... }`, and you must set *every* field
+exactly once — Ember won't let you forget one or leave it to chance. You read a field with
+`value.field`.
+
+### Methods and `self`
+
+A struct can carry **methods**, written inside its braces. A method takes `self` as its first
+parameter, explicitly — that's the receiver, the value the method was called on. Inside, you
+read its fields as `self.x` and call its other methods as `self.whatever()`. Dispatch is
+static: Ember knows the exact type at the call site, so there's no virtual-call overhead.
+
+Notice `distance` calls `sqrt`, which is a built-in maths function — no import needed. (Its
+friends `pow`, `abs`, `floor`, `ceil`, `round`, and `random` are all built in too; the rest of
+the maths lives in the standard library.)
+
+### Changing a field
+
+You can change a field, but only through a **mutable place** — a `var` binding, or a `mut`
+parameter (full details in [Chapter 12](#chapter-12--ownership-without-tears)). Through a `let`
+or a plain parameter, fields are read-only.
+
+```ember
+struct Pt { x: int  y: int }
+struct Line { a: Pt  b: Pt }
+
+fn main() -> int {
+    var ln = Line { a: Pt { x: 1, y: 2 }, b: Pt { x: 3, y: 4 } }
+    ln.a.x = 10            // mutate a nested field through the var
+    return ln.a.x + ln.b.y // 10 + 4 = 14
+}
+```
+
+Notice you can reach right down a nested path — `ln.a.x = 10` — and Ember writes it back where
+it belongs. Try the same thing through a `let` and you'll get a polite compile error pointing
+you at `var`.
+
+### Interfaces and `implements`
+
+An `interface` is a list of method signatures — a promise about what a type can do. A struct
+declares it keeps that promise with `implements`, and the compiler *checks* that it actually
+does:
+
+```ember
+interface Ord {
+    fn compare(self, other: Self) -> int   // negative, zero, or positive
+}
+
+struct Version implements Ord {
+    number: int
+
+    fn compare(self, other: Version) -> int {   // 'Self' is Version here
+        return self.number - other.number
+    }
+}
+
+fn main() -> int {
+    let a = Version { number: 5 }
+    return a.compare(Version { number: 4 })   // => 1
+}
+```
+
+Conformance is **nominal**: you have to *say* `implements Ord`, it isn't inferred from the
+shape of your methods. Name an interface you don't satisfy — miss a method, get a signature
+wrong, misspell the interface — and it's a compile error, named clearly. Note the capital-`S`
+`Self`: inside an interface it stands for "whatever type ends up implementing me," and it
+resolves to `Version` in the struct above. (Lower-case `self` is the receiver *value*;
+capital `Self` is the *type*. One letter, two jobs — keep them straight.)
+
+Interfaces earn their keep three ways. They *check* that a type provides the right methods (just
+now); they *bound generics* so a `<T: Ord>` function may call `compare` on its parameter
+([Chapter 10](#chapter-10--generics-and-interfaces)); and — this one's new, and worth a section of
+its own — they work as **value types**, which is how you get runtime polymorphism without
+inheritance.
+
+### Interfaces as values: dynamic dispatch
+
+Everything above is resolved at compile time: the receiver's exact type is known, so a method call
+goes straight to the right code. But sometimes you genuinely don't know the concrete type until the
+program runs — you want *a list of different shapes*, each computing its own area, all behind one
+type. For that, use the interface itself **as a type**:
+
+```ember
+interface Shape {
+    fn area(self) -> float
+}
+
+struct Circle implements Shape {
+    radius: float
+    fn area(self) -> float { return 3.14159 * self.radius * self.radius }
+}
+
+struct Rect implements Shape {
+    w: float
+    h: float
+    fn area(self) -> float { return self.w * self.h }
+}
+
+fn main() -> int {
+    let shapes: [Shape] = [Circle { radius: 2.0 }, Rect { w: 3.0, h: 4.0 }]
+    var total = 0.0
+    for s in shapes { total = total + s.area() }
+    println("total {total}")
+    return 0
+}
+```
+
+```
+total 24.5664
+=> 0
+```
+
+A `[Shape]` holds a `Circle` and a `Rect` side by side, and `s.area()` calls the *right* one for
+each. The moment you put a `Circle` where a `Shape` is expected, Ember **upcasts** it: the value
+becomes a small box pairing the receiver with a table of its methods. A call then looks the
+method up in that table at run time. One `fn report(s: Shape)` serves every implementer you'll
+ever write, with no shared base class in sight. The shipped `examples/13_interfaces.em` does
+exactly this with three shapes and a `report` function.
+
+There's **one rule** on which interfaces can be used this way, and it's a sensible one: the
+interface must be **object-safe**, meaning no method may mention `Self` anywhere but the receiver.
+The reason is concrete — once a value is hidden behind `Shape`, its real type is erased, so a method
+like `compare(self, other: Self)` has nowhere to get a *second* value "of the same type." Ember
+tells you so plainly if you try:
+
+```ember
+interface Ord {
+    fn compare(self, other: Self) -> int   // 'other: Self' — not object-safe
+}
+let xs: [Ord] = [ ... ]
+```
+
+```
+error: this interface can't be used as a value type: one of its methods uses 'Self' beyond the
+receiver, which dynamic dispatch can't honor. Use it as a generic bound instead (e.g. fn f<T: Name>(x: T)).
+```
+
+That's not a limitation so much as a signpost: an interface like `Ord` is perfectly usable — just
+as a *generic bound*, where the concrete type is still known, which is the very next chapter. Use
+`Shape`-style interfaces (methods that only ever take `self`) as values, and `Ord`-style interfaces
+(methods comparing two of a kind) as bounds.
+
+> **Fireside trivia.** Type systems split into two camps on this. *Structural* typing says "if a
+> type has the methods, it qualifies." *Nominal* typing — Ember's choice — says "it qualifies only
+> if it *declares* that it does," which is what `implements` is for. The case for nominal is the
+> accidental match: two types with a `compare` method that mean entirely different things by it.
+> "It says `implements Ord` right there" is a hard line for a confused reader, human or machine,
+> to misread.
+
+---
+
+## Chapter 8 — Enums and Pattern Matching
+
+If a struct is "all of these fields at once," an enum is "exactly one of these
+possibilities."
+
+```ember
+enum Shape {
+    Circle(radius: float)
+    Rect(width: float, height: float)
+    Origin                              // a variant with no data needs no parens
+}
+```
+
+A `Shape` value is *one* of those three things: a circle with a radius, a rectangle with a
+width and height, or the origin. Each variant can carry its own typed, named fields. You build
+one by naming the variant:
+
+```ember
+let c = Circle(2.0)
+let r = Rect(3.0, 4.0)
+let o = Origin
+```
+
+### `match`: handling every case
+
+You take an enum apart with `match`, which checks the value against each variant and runs the
+matching arm, binding that variant's fields as local names:
+
+```ember
+fn area(s: Shape) -> float {
+    match s {
+        case Circle(r)  { return 3.14159 * r * r }
+        case Rect(w, h) { return w * h }
+        case Origin     { return 0.0 }
+    }
+}
+```
+
+Three properties make `match` trustworthy:
+
+- **It's exhaustive.** Handle every variant or the program won't compile. Add a fourth shape
+  six months from now and the compiler will march you to every `match` that forgot about it.
+- **There's no fallthrough.** The first matching arm wins and that's the end of it; no `break`
+  needed, no accidental tumble into the next case.
+- **It binds fields cleanly.** In `case Circle(r)`, the name `r` is the circle's radius,
+  scoped to just that arm.
+
+### The catch-all: `case _`
+
+When you genuinely want "everything else," `case _` handles every variant an earlier arm
+didn't. It keeps a `match` exhaustive without listing the whole world, and it must come last
+(anything after it would be unreachable):
+
+```ember
+match colour {
+    case Red   { return 1 }
+    case Green { return 2 }
+    case _     { return 0 }   // any other colour
+}
+```
+
+(Be aware that `_` *inside* a variant pattern, like `case Some(_)`, is just an ordinary
+ignored binding — "there's a value here but I don't care about it" — not the catch-all.)
+
+### A couple of fine points
+
+Variant names are **globally unique** across your whole program — two enums can't both have a
+`Red`. In exchange, you can name a variant bare (`Origin`) or spelled out through its enum
+(`Shape.Origin`, `Circle` or `Shape.Circle`), whichever reads better; they mean the same
+thing.
+
+And one syntactic quirk you'll meet eventually: in the *header* of an `if`, `for`, or `match`,
+Ember switches off struct-literal syntax so that the `{` can unambiguously start the block. If
+you ever genuinely need a struct literal right there, wrap it in parentheses. In practice this
+almost never comes up, but now it won't puzzle you when it does.
+
+> **Fireside trivia.** Sum types — the formal name for these — are decades old (ML had them
+> in the 1970s) and spent a long time confined to academic and functional languages while the
+> mainstream made do with null and inheritance. Their slow conquest of industry is one of the
+> quiet happy endings in language design: Rust, Swift, Kotlin, TypeScript, and modern C# all
+> have them now. Ember was never going to *not* have them. They were the first thing on the
+> list.
+
+---
+
+# Part III — Bigger Ideas
+
+## Chapter 9 — Errors and Optionals
+
+**Ember has no exceptions and no `null`.** Nothing is ever secretly absent, and nothing throws
+past you up an invisible staircase of stack frames. When something can fail or be missing, that
+fact is written into the *type*, and you deal with it where it happens.
+
+Two enums carry this, and — this is the lovely part — they're not special built-ins. They're
+ordinary generic enums (Chapter 10) that happen to be so useful they're provided to every
+program automatically:
+
+- **`Option<T>`** is `Some(value)` or `None` — "a `T`, or nothing."
+- **`Result<T, E>`** is `Ok(value)` or `Err(error)` — "a `T`, or an error of type `E`."
+
+### Option: maybe there's a value
+
+```ember
+fn safe_div(a: int, b: int) -> Option<int> {
+    if b == 0 { return None }
+    return Some(a / b)
+}
+
+fn main() -> int {
+    match safe_div(10, 2) {
+        case Some(v) { return v }   // v is the int, 5
+        case None    { return 0 }
+    }
+}
+```
+
+```
+=> 5
+```
+
+There's no way to "forget to check." To get the value out, you `match`, and the compiler makes
+you handle the `None`. The entire family of null-pointer bugs is structurally impossible.
+
+### Result: it worked, or here's why it didn't
+
+```ember
+fn checked(n: int) -> Result<int, string> {
+    if n < 0 { return Err("negative") }
+    return Ok(n)
+}
+```
+
+`Result` is `Option` with a reason attached. When something fails, you don't just learn *that*
+it failed; you get an error value explaining it.
+
+### The `?` operator: stop the boilerplate
+
+Checking every `Result` by hand gets tedious fast — the dreaded pyramid of "if this failed,
+return the failure." The `?` operator collapses it. Put `?` after an expression that yields a
+`Result` (or an `Option`): if it's `Ok`/`Some`, you get the value and carry on; if it's
+`Err`/`None`, the whole function *returns that failure immediately*.
+
+```ember
+fn sum(a: int, b: int) -> Result<int, string> {
+    return Ok(checked(a)? + checked(b)?)   // any Err here short-circuits the whole function
+}
+
+fn main() -> int {
+    match sum(10, 20) {
+        case Ok(v)  { println("ok {v}")  return v }
+        case Err(e) { println("err {e}") return -1 }
+    }
+}
+```
+
+```
+ok 30
+=> 30
+```
+
+The catch — and it's a sensible one — is that `?` can only propagate a failure your function is
+declared to return. Use `?` on a `Result<_, string>` and your function must itself return a
+`Result` with that same `string` error type; use it on an `Option` and your function must
+return an `Option`. The failure always has somewhere legal to go.
+
+> **Fireside trivia.** Tony Hoare introduced the null reference in 1965 and later called it
+> his "billion-dollar mistake," estimating the cost of the bugs, crashes, and security holes
+> it caused over the following decades. He was almost certainly low-balling it. Ember is one of
+> a growing number of languages built by people who took that confession seriously and simply
+> declined to include the feature.
+
+---
+
+## Chapter 10 — Generics and Interfaces
+
+A generic is code written once that works for many types. You've been using them already —
+`Option<T>`, `Result<T, E>`, and `[T]` are all generic. Now let's write our own.
+
+### Generic structs and enums
+
+Put one or more type parameters in angle brackets after the name:
+
+```ember
+struct Box<T> {
+    value: T
+    fn get(self) -> T { return self.value }
+    fn replaced(self, n: T) -> Box<T> { return Box<T> { value: n } }
+}
+
+struct Pair<A, B> {
+    first:  A
+    second: B
+}
+
+fn main() -> int {
+    let b = Box<int> { value: 3 }
+    let p = Pair<int, int> { first: 3, second: 4 }
+    return b.replaced(7).get() + p.first + p.second   // 7 + 3 + 4 = 14
+}
+```
+
+```
+=> 14
+```
+
+Each *instantiation* — `Box<int>`, `Box<string>`, `Pair<int, bool>` — is its own distinct
+type. You write the type arguments explicitly when you construct (`Box<int> { value: 3 }`), and
+they nest happily (`Box<Box<int>>`). Enums are generic the same way, which is the whole secret
+behind `Option<T>` and `Result<T, E>` being library types rather than magic.
+
+### Generic functions, and inference
+
+Functions and methods can be generic too, and here you usually *don't* write the type arguments
+— Ember infers them from what you pass and what you expect back:
+
+```ember
+fn identity<T>(move x: T) -> T {
+    return x
+}
+
+fn main() -> int {
+    println(identity("hi"))   // T inferred as string
+    return identity(7)        // T inferred as int
+}
+```
+
+```
+hi
+=> 7
+```
+
+No "turbofish," no `identity<int>(7)` ceremony at the call. The type just flows in.
+
+> **The `move` you may not have expected.** Did you notice `move x` up there? A plain
+> parameter only *borrows*, and you can't return a borrowed value — it would escape the
+> function. For a concrete type you'd hit the same rule; for a generic `T`, which Ember treats
+> as an owned value by default, returning the argument means taking it `move`. This is real and
+> the compiler enforces it. The whole ownership story is the next chapter; for now, just know
+> that "a generic function that hands its argument back out" is written `move`.
+
+### Bounds: asking a type parameter to do something
+
+Inside a generic body, `T` is *opaque* — you can pass it around, store it, return it, but you
+can't (say) call methods on it, because you've no idea what type it'll be. A **bound** fixes
+that by requiring `T` to implement an interface:
+
+```ember
+interface Ord {
+    fn compare(self, other: Self) -> int
+}
+
+struct Version implements Ord {
+    number: int
+    fn compare(self, other: Version) -> int { return self.number - other.number }
+}
+
+fn max<T: Ord>(move a: T, move b: T) -> T {   // T must implement Ord
+    if a.compare(b) >= 0 { return a }         // ...so now we may call compare on it
+    return b
+}
+```
+
+`<T: Ord>` says "`T`, but only types that implement `Ord`." Now `a.compare(b)` is legal,
+because every possible `T` is guaranteed to have it. And the guarantee is enforced from the
+other side too — try to use a type that *doesn't* qualify and you're stopped:
+
+```ember
+fn main() -> int { return max(1, 2) }   // error: type argument does not satisfy the generic bound
+```
+
+`int` doesn't implement `Ord` (or any interface — yet), so `max(1, 2)` is rejected at compile
+time, by name. No surprises at runtime.
+
+### The `Copy` bound
+
+There's one special bound, `Copy`, for the opposite need: "this `T` can be freely duplicated,
+so I don't need `move`."
+
+```ember
+fn id<T: Copy>(x: T) -> T {   // no 'move' needed — Copy means it can be duplicated
+    return x
+}
+```
+
+One detail here is worth knowing: **`Copy` means every type *except* a struct or an array.**
+Numbers copy bit-for-bit; strings, enums, and closures are immutable and shared, so "copying"
+one is just a cheap bump of a reference count. Only the unique-owner aggregates — structs and
+arrays — are *not* `Copy`. Hand one to a `Copy`-bounded function and you get a crisp refusal:
+
+```ember
+struct User { name: string  age: int }
+let v = id(User { name: "ada", age: 36 })
+```
+
+```
+error: type argument is not Copy — only scalars, strings, enums, and closures satisfy a 'Copy' bound (not a struct or array)
+```
+
+A type parameter can carry **several bounds** at once, joined with `+`: `<K: Hash + Eq>` asks for
+a type that can both hash itself and compare itself for equality, and `Copy` composes right
+alongside them (`T: Ord + Copy`). Bounds aren't limited to free functions, either — a **generic
+struct** can be bounded too, and the standard library leans on exactly that: the hash map is
+declared `struct Map<K: Hash + Eq, V>`, which is what lets it hash and compare keys of
+*any* qualifying type. (We'll meet it properly in
+[Chapter 15](#chapter-15--modules-and-the-standard-library).) What's *not* here yet: bounds on a
+generic struct's individual *methods* and on generic *enums*, and inference stays call-site only
+(no turbofish, by design). The honest list is in
+[Chapter 23](#chapter-23--the-not-yet-list).
+
+> **Static versus dynamic, in one breath.** A bound (`<T: Ord>`) and an interface-as-a-value
+> ([Chapter 7](#chapter-7--structs-and-methods)) are the two halves of polymorphism, and Ember
+> keeps them distinct. A bound is resolved when the concrete type is *known* — the compiler hands
+> the call a hidden table of the right methods (a "witness"), so there's no runtime lookup and no
+> boxing. An interface value is for when the type *isn't* known until runtime — there the lookup
+> happens through the value's own method table. Same interfaces, two dispatch strategies: reach for
+> a bound when you can, a value type when you must.
+
+> **How generics are compiled, today.** Because every value has a uniform representation,
+> Ember compiles a generic *once* — `Box<int>` and `Box<string>` share one compiled body. This
+> is the "erased" strategy, and it's why adding generics doesn't blow up your compile times.
+> (The plan is for release builds to also offer monomorphization — a specialised copy per type
+> for maximum speed — but that's a future build mode, not something you write differently.
+> You'll never change your code for it.)
+
+> **Fireside trivia.** The angle brackets `<T>` for generics are a C++ inheritance, and
+> they've caused parser writers grief ever since, because `<` is also "less than." Is `a < b >
+> c` a comparison or a generic? Ember resolves the ambiguity with a lookahead rule (it's a
+> generic only when a balanced `<...>` is immediately followed by `{`), which works
+> beautifully for normal code and is logged, with admirable honesty, as a known sharp edge to
+> be made fully rigorous later. Every language in this family has a scar in exactly this spot.
+
+---
+
+## Chapter 11 — Functions as Values, and Closures
+
+Functions in Ember are values. You can put one in a binding, pass it to another function, and
+call it later. A function *type* is written `fn(ArgTypes) -> ReturnType`.
+
+```ember
+fn double(x: int) -> int { return x * 2 }
+
+fn apply(f: fn(int) -> int, x: int) -> int {
+    return f(x)
+}
+
+fn main() -> int {
+    let g = double                 // a named function, held as a value
+    return apply(double, 5) + g(7) // 10 + 14 = 24
+}
+```
+
+```
+=> 24
+```
+
+`apply` takes a *function* as its first argument — any `fn(int) -> int` will do — and calls it.
+That's the foundation of every "do this to each element" operation.
+
+### Lambdas
+
+A lambda is a function written inline, with `|params| expr` (or `|params| { ... }` for a
+block). Its parameter types are inferred from where it's used:
+
+```ember
+fn main() -> int {
+    return apply(|x| x + 100, 5)   // the lambda is an fn(int) -> int, inferred from apply
+}
+```
+
+```
+=> 105
+```
+
+A lambda can **capture** variables from around it — and it does so *by value*, copying them in
+when the lambda is created. That means it can never dangle, and there are no lifetime puzzles:
+
+```ember
+fn main() -> int {
+    let n = 100
+    let add_n: fn(int) -> int = |x| x + n   // captures n (by value)
+    return add_n(5)                         // 105
+}
+```
+
+```
+=> 105
+```
+
+> **The one rule that will trip you up.** A lambda needs to know its types, and it learns them
+> from context — either by being passed straight into a function that expects a function type,
+> or from an explicit annotation on the binding. So `apply(|x| x + 1, 5)` is fine (the context
+> is `apply`'s parameter), and `let f: fn(int) -> int = |x| x + 1` is fine (the annotation).
+> But a bare, unannotated `let f = |x| x + 1` is an **error** — Ember can't guess what `x` is.
+> The compiler says so plainly: *"a lambda needs a function-typed context."* When in doubt,
+> annotate the binding or pass the lambda directly.
+
+Two more honest limits: capturing is **read-only** (a closure can't reassign a variable it
+captured), and you can capture scalars, strings, and enums, but **not a struct or an array**
+(that would alias a unique owner — pass it as a parameter instead).
+
+### Higher-order functions, the standard-library way
+
+Put functions-as-values together with generics and you get the classic trio, which live in
+`std/list` (more on imports in [Chapter 15](#chapter-15--modules-and-the-standard-library)):
+
+```ember
+import "std/list" as list
+
+fn main() -> int {
+    let xs = [1, 2, 3, 4, 5]
+    let evens   = list.filter(xs, |n| n % 2 == 0)            // [2, 4]
+    let doubled = list.map(evens, |n| n * 2)                 // [4, 8]
+    let sum     = list.reduce(doubled, 0, |acc, n| acc + n)  // 12
+    return sum
+}
+```
+
+```
+=> 12
+```
+
+There's a `list.sort` too, which takes a "is a before b?" lambda:
+
+```ember
+import "std/list" as list
+
+fn main() -> int {
+    let words = ["ccc", "a", "bb"]
+    let sorted = list.sort(words, |a, b| a.len() < b.len())  // ["a", "bb", "ccc"]
+    for w in sorted { println(w) }
+    return sorted.len()
+}
+```
+
+```
+a
+bb
+ccc
+=> 3
+```
+
+---
+
+## Chapter 12 — Ownership Without Tears
+
+Ownership has a reputation for being where the fun stops and the fighting starts. The good news
+is that **for ordinary, everyday code, you write nothing special at all.** No annotations, no
+symbols, no lifetimes. You've written a dozen working programs in this book already and ownership
+never once got in your way.
+
+The rules below are what's quietly keeping you safe underneath. You mostly need them for the
+day the compiler stops you — and when it does, it explains itself.
+
+### Three ways to pass a value
+
+When a function takes a parameter, there are three relationships it can have with the value:
+
+- **Borrow (the default).** Plain `fn f(p: Point)` *borrows* — it can look but the caller keeps
+  ownership. This is what you want almost always.
+- **Mutable borrow: `mut`.** `fn f(mut p: Point)` borrows *and may change* the value; the
+  changes are visible to the caller afterward.
+- **Move: `move`.** `fn f(move p: Point)` *takes ownership*. The caller hands the value over
+  and can't use it anymore.
+
+The qualifier goes **before the binding**, and it reads the same for `self` and for named
+parameters: `mut self`, `move items`. There are no `&` or `&mut` symbols, and no lifetime
+annotations — Ember infers all of that. The *safe* direction (borrowing) is the one you get for
+free; the *consequential* direction (giving a value away with `move`) is the one you have to
+type out. Hard to do the dangerous thing by accident.
+
+```ember
+struct Point { x: int  y: int }
+
+fn bump(mut p: Point) -> int {   // mutable borrow: the caller sees the change
+    p.x = p.x + 1
+    return p.x
+}
+
+fn main() -> int {
+    var p = Point { x: 1, y: 2 } // var = a mutable place
+    p.x = 10                     // mutate a field through the var
+    return bump(p)               // => 11
+}
+```
+
+Remember from Chapter 7: you can only mutate a field through a **mutable place** — a `var`
+binding or a `mut`/`move` parameter. Through a `let` or a plain borrow, the value is read-only.
+
+### Move semantics: one owner at a time
+
+**Structs and arrays are *owned* values, with exactly one owner at a time.** The moment you
+hand ownership somewhere else — assign it to another binding, pass it to a `move` parameter,
+return it, or store it in a field — the original name is "moved out" and can't be used again.
+Try, and the compiler stops you:
+
+```ember
+fn main() -> int {
+    let a = [1, 2, 3]
+    let b = a          // ownership moves from a to b
+    return b[0] + a[0] // using 'a' here is the mistake
+}
+```
+
+```
+error: use of 'a' after it was moved
+help: a move transfers ownership; pass it without `move` to borrow it instead, or make a copy before the move
+note: value moved here
+```
+
+Three lines: *what* you did wrong, *how* to fix it, and *where* the value went. That's the
+compiler-as-teacher principle in action. The fix here is to borrow instead of moving, or to
+make a copy before the move — exactly as it says.
+
+This is why **borrowing is the default for parameters**. A function that just reads an array
+should take it plain, so the caller keeps it:
+
+```ember
+fn total(xs: [int]) -> int {       // borrows xs
+    var s = 0
+    for x in xs { s = s + x }
+    return s
+}
+
+fn main() -> int {
+    let a = [1, 2, 3]
+    let t = total(a)               // a is only borrowed...
+    return t + a.len()             // ...so a is still ours here. => 9
+}
+```
+
+```
+=> 9
+```
+
+### Returning an owned value: use `move`
+
+A plain parameter is borrowed, and **you can't return a borrowed value** — it would outlive the
+call and dangle. Ember catches that too:
+
+```ember
+struct User { name: string  age: int }
+
+fn pick(u: User) -> User { return u }   // error: cannot return a borrowed value
+```
+
+```
+error: cannot return a borrowed value — it would escape the function; take the parameter as 'move'
+```
+
+Do as it says — take it `move` — and all is well, because now the function genuinely owns the
+value it's handing back:
+
+```ember
+fn pick(move u: User) -> User { return u }   // owns u, may return it. Fine.
+```
+
+### The shortcut that means you'll rarely fight this
+
+Here's a detail worth knowing: **small all-scalar structs held in a `let` are quietly *copied*,
+not moved.** A `Point { x: int, y: int }` bound
+with `let` can be read through two names at once — Ember duplicates it for you, because it's
+tiny and made entirely of numbers. The move rules above kick in fully for arrays, for structs
+that contain a string or an array, and for structs held in a `var`.
+
+The safe way to hold all this in your head is one sentence: **write as if every struct and
+array moves when you hand it off.** If you do, you'll never be surprised by an error — at worst
+you'll occasionally be *allowed* something the strict model would forbid, which never hurt
+anyone. Lead with borrowing, reach for `move` when you mean to give a value away, and the
+compiler will tell you on the rare occasion you've got it wrong.
+
+### The rest of the safety net, briefly
+
+The same analysis quietly enforces a few more things, all in the name of "no value is ever read
+after it's gone, and nothing mutable is aliased":
+
+- **No aliased mutation.** Because a move consumes the source, you can't end up with two names
+  for one mutable value and change it through both.
+- **Mutable XOR shared.** In a single call you can't pass the same value as a `mut`/`move`
+  argument *and* also borrow it elsewhere in the same call.
+- **Branches merge sensibly.** Moving a value in one arm of an `if`/`match` is fine; the
+  compiler tracks each path. Moving a value *inside a loop body* is rejected, because the next
+  turn would move it again.
+- **Scalars, strings, and enums copy freely.** None of this applies to them — only to the
+  unique-owner aggregates (structs and arrays).
+
+> **Fireside trivia.** Earlier in Ember's development, a generic function that aliased a struct
+> argument managed to *free the same memory twice* at runtime — precisely the class of bug an
+> ownership system exists to abolish, committed by the ownership system's own compiler. It was
+> caught, written up, and fixed by making type parameters move-by-default (the `move`/`Copy`
+> rules you met last chapter). The lesson stuck: the rules are load-bearing, and the language
+> holds itself to them too.
+
+---
+
+## Chapter 13 — Memory, the Quiet Way
+
+Here's a question you may not have thought to ask, because Ember has carefully arranged for you
+not to need to: *when does all this memory get cleaned up?*
+
+The usual answers are two: call `free` yourself and hope you got it right, or run a garbage
+collector that periodically reclaims what's unreachable, at the cost of some runtime overhead and
+the occasional pause. **Ember does neither.** It has no garbage collector, and you never write
+`free`. Memory is reclaimed *deterministically* — at exactly known moments — and the ownership
+rules from the last chapter are what make that possible.
+
+The discipline is simple to state:
+
+- **Structs and arrays are unique owners, and they're freed at the end of the scope that owns
+  them.** When a `let`/`var` holding a struct or array goes out of scope (hits the closing
+  brace), its memory is released right then, along with anything it owns inside it. Because the
+  move checker guarantees there's exactly one owner, this is a plain, immediate free with no
+  bookkeeping and no guessing. A value that was *moved out* isn't freed here — its new owner
+  will do it. A value that's *returned* escapes to the caller, who now owns it.
+
+- **Strings and enums are shared and reference-counted.** These are immutable, so several names
+  can safely point at the same one. Each holds a counted reference; aliasing bumps the count,
+  going out of scope drops it, and the value is freed when the last reference goes. Freeing a
+  container releases what it holds — an array of strings frees its strings on the way out.
+
+```ember
+fn main() -> string {
+    let p = Point { x: 1, y: 2 }   // a struct...
+    let s = "hello"                // ...and a string
+    let t = s                      // t shares s (count is now 2)
+    return t                       // t escapes to the caller; at this brace, p is
+}                                  // freed and s drops its reference (one left)
+```
+
+The reclamation is **eager** — it happens at the brace, not when the program exits — so a
+long-running program that loops forever (say, concurrent workers pulling jobs off a channel)
+doesn't slowly accumulate garbage. And here's the property that makes reference-counting
+*complete* rather than leaky: because the only mutable things (structs and arrays) are uniquely
+owned, and everything shared is immutable, **no reference cycle can ever form.** Cycles are the
+one thing naive reference-counting can't collect; Ember's value model makes them impossible to
+build in the first place. There is nothing a tracing garbage collector would catch that this
+misses.
+
+> **Fireside trivia.** The "billion-dollar" sibling to Hoare's null mistake is arguably the
+> use-after-free, the bug where you keep using memory after it's been handed back. Whole
+> categories of security exploit are built on it. Ember's one set of rules — single ownership,
+> immutable sharing — covers three things at once: memory safety, deterministic cleanup, and
+> data-race freedom (next chapter).
+
+---
+
+## Chapter 14 — Concurrency
+
+Doing several things at once is where sharp edges tend to appear. Ember takes a deliberately
+structured approach that keeps them blunt.
+
+The headline ideas:
+
+- **No function colouring.** There's no `async`/`await` split dividing your code into two
+  incompatible worlds. *Any* function can be run concurrently. (You'll remember unit functions
+  from Chapter 4 — those make natural workers.)
+- **Tasks are scoped.** Concurrency happens inside a `nursery` block, and tasks **cannot
+  outlive it** — the block does not finish until every task spawned inside it has finished. When
+  control leaves the nursery, everything it started is done. No leaked background threads, no
+  "did that ever complete?"
+- **They talk over typed channels.** A `Channel<T>` carries values of type `T` between tasks.
+
+Here's a complete producer/consumer:
+
+```ember
+fn producer(ch: Channel<int>) {
+    send(ch, 10)
+    send(ch, 20)
+    send(ch, 30)
+    close(ch)              // no more values coming
+}
+
+fn consumer(ch: Channel<int>, out: Channel<int>) {
+    var sum = 0
+    loop {
+        match recv(ch) {
+            case Some(v) { sum = sum + v }   // a value arrived
+            case None    { break }           // channel closed and drained
+        }
+    }
+    send(out, sum)
+}
+
+fn main() -> int {
+    let ch:  Channel<int> = channel(2)   // buffered, capacity 2
+    let out: Channel<int> = channel(1)
+    nursery {
+        spawn producer(ch)
+        spawn consumer(ch, out)
+    }                                    // both tasks are finished here, guaranteed
+    match recv(out) {
+        case Some(v) { return v }        // => 60
+        case None    { return 0 }
+    }
+}
+```
+
+```
+=> 60
+```
+
+The pieces:
+
+- **`nursery { ... }`** — a task group. The block joins all its tasks before it exits.
+- **`spawn f(args)`** — launch a call to `f` as a task in the enclosing nursery. (Using `spawn`
+  outside a nursery is a compile error — there'd be nothing to scope it to.)
+- **`channel(N)`** — make a buffered channel of capacity `N`. Its element type comes from the
+  binding's annotation (`let ch: Channel<int> = channel(2)`).
+- **`send(ch, v)`** — put a value in (blocks if the buffer is full). Sending on a channel you've
+  already `close`d is a runtime error — closing means "no more values are coming," so close only
+  once every `send` is done. **`recv(ch)`** — take the next value, as an `Option<T>`: `Some(v)`
+  while values flow, `None` once the channel is *closed and drained*. That `None` is how a consumer
+  loop knows to stop; on an open-but-empty channel it blocks until something arrives.
+- **`try_recv(ch)`** — `recv` that never blocks: `Some(v)` if a value is queued *right now*, `None`
+  if the channel is empty (or closed and drained). It's the primitive an event loop reaches for when
+  it has other work to do and can't afford to sit waiting on the channel.
+- **`close(ch)`** — mark the channel closed. Queued values still drain; after that, `recv`
+  returns `None` instead of blocking forever.
+
+Notice how naturally `recv` returning `Option<T>` falls out of Chapter 9 — "maybe there's a
+value" is *exactly* an `Option`, so the same `match` you already know handles the channel
+draining.
+
+### Many workers, the same code
+
+Because channels are shareable handles, you can `spawn` several workers all pulling from one
+jobs channel, and the work fans out across whichever worker is free — a worker pool, in a few
+lines. (The shipped example `examples/05_concurrency.em` does exactly this: one dispatcher, four
+workers counting error lines, a results channel summed at the end. It runs today.)
+
+### One runtime, two speeds
+
+The default runtime runs your tasks as **green threads**
+cooperatively on a single OS thread — a `send` or `recv` that can't proceed yields, and the
+scheduler resumes it later. But the *same program*, with no source changes, can be compiled
+against a **parallel runtime** (the compiler built with `EMBER_PARALLEL=1`) where each task gets
+a real OS thread and runs on a separate core. Same `nursery`/`spawn`/`Channel<T>`, same answer —
+only the wall-clock time changes.
+
+This works *because* of ownership. Recall: structs and arrays are uniquely owned (never aliased
+across tasks), and strings and enums are immutable. So there's essentially no shared mutable
+state for threads to race over — the data-race class of bug is gone by construction, the same way
+use-after-free was. Both runtimes also detect a genuine **deadlock** (every task blocked on a
+channel that can never deliver) and report it as a clean runtime error instead of hanging.
+
+> **One honest limit.** Today, channel communication is **child-to-child**: `main` drives the
+> nursery's join, so it doesn't itself sit in a `recv` loop *during* the nursery. The pattern
+> above — workers talk over channels inside the nursery, `main` reads the results *after* it —
+> is the idiom. True many-core M:N scheduling, cancellation-on-failure, and `select`/timeouts
+> are designed and on the list ([Chapter 23](#chapter-23--the-not-yet-list)), not yet built.
+
+> **Fireside trivia.** The word "nursery" for a scoped task group comes from the "structured
+> concurrency" movement of the late 2010s — the argument that concurrency should nest like
+> blocks do, with a clear beginning and end, rather than spawning free-floating threads that
+> wander off. The name is a metaphor: tasks are children, the nursery looks after them, and
+> nobody leaves until everyone's accounted for. It's a much nicer image than "thread pool," and
+> a much nicer debugging experience too.
+
+---
+
+## Chapter 15 — Modules and the Standard Library
+
+As a program grows past one file, you split it into **modules**. In Ember, *a file is a
+module*, and you pull one into another with `import`:
+
+```ember
+// geom.em
+struct Point { x: int  y: int }
+fn sum(p: Point) -> int { return p.x + p.y }
+```
+
+```ember
+// main.em
+import "geom" as geom
+
+fn main() -> int {
+    let p = geom.Point { x: 3, y: 4 }   // construct an imported type, qualified
+    return geom.sum(p)                  // call an imported function, qualified
+}
+```
+
+```
+=> 7
+```
+
+Two things to notice. First, the import always has an **alias** (`as geom`), and you use
+everything *through* it — `geom.Point`, `geom.sum`. There's no implicit flat merging of names,
+so you can always see at a glance where something comes from, and two modules can never collide.
+Imported types work in every position you'd expect: annotations, construction literals
+(including generic ones like `box.Box<int> { value: 42 }`), fields, and type arguments.
+
+Second, **privacy is by leading underscore.** A top-level declaration whose name starts with `_`
+is private to its own module; everything else is exported. It's not a mere convention — it's
+enforced:
+
+```ember
+// in geom.em:  fn _secret() -> int { return 99 }
+import "geom" as geom
+fn main() -> int { return geom._secret() }
+```
+
+```
+error: that function is private to its module (leading '_')
+```
+
+So: public is the default, and you opt *into* privacy with a `_`. It costs zero keywords and
+self-documents at the call site.
+
+### The standard library
+
+Some of what you've used — `println`, `sqrt`, the string methods — is built right into the
+language. The rest of the standard library lives in real Ember source files under the reserved
+`std/` prefix, and you import it exactly like your own modules. (`std/` always resolves to the
+toolchain's library directory, wherever you run the compiler from.) This is the model for how
+the library grows: written in Ember, over a small native base, imported like anything else.
+
+What's there today:
+
+**`std/string`** — the fuller text toolkit beyond the built-in methods: `to_upper`, `to_lower`,
+`trim`, `contains`, `index_of`, `starts_with`, `ends_with`, `repeat`, `substring`, `replace`,
+`join`. (All byte-wise ASCII, like the built-ins.)
+
+```ember
+import "std/string" as str
+
+fn main() -> int {
+    let name = str.trim("  ember  ")
+    println("Hello, " + str.to_upper(name) + "!")   // Hello, EMBER!
+    return str.index_of("hello", "ll")              // 2
+}
+```
+
+```
+Hello, EMBER!
+=> 2
+```
+
+**`std/list`** — the generic functional toolkit over arrays you met in Chapter 11: `map`,
+`filter`, `reduce`, `sort`, each taking a function value.
+
+**`std/map`** — `Map<K, V>`, a generic hash map keyed by **any** type that is `Hash + Eq`.
+The built-in scalars and strings all qualify, and a user `struct` that `implements Hash, Eq` is a
+valid key too (no `Copy` needed — a struct key is deep-cloned on store, so the map owns its copy);
+`Map<string, int>`, `Map<int, bool>`, `Map<Point, V>` all work from the same code. Build one, then
+`set`, `get` (which returns an `Option<V>` — of course it does), `has`, `size`, and `keys` (which
+hands back a `[K]` in bucket order):
+
+```ember
+import "std/map" as mp
+
+fn main() -> int {
+    var counts = mp.Map<string, int> { buckets: [], count: 0 }
+    for w in "the cat the dog the bird".split(" ") {
+        match counts.get(w) {
+            case Some(n) { counts.set(w, n + 1) }
+            case None    { counts.set(w, 1) }
+        }
+    }
+    match counts.get("the") { case Some(n) { println("the x{n}") } case None {} }
+    return counts.size()        // 4 distinct words
+}
+```
+
+```
+the x3
+=> 4
+```
+
+You spell out *both* type arguments at construction — `Map<string, int>`, `Map<int, bool>` — just
+like any other generic. There's no `Copy` requirement on the key, and this is newer than some of
+the surrounding prose: a built-in key (a scalar or a string) copies cheaply, and a move-type
+*struct* key is **deep-cloned on store**, so the map owns its copy and you keep yours — value-semantic
+keys with no `clone()` ceremony. A key type need only be `Hash + Eq`. The shipped
+`examples/15_wordcount.em` is a real little tool built on this — tally the words in its command-line
+arguments — and `examples/06_calculator.em` leans on it too.
+
+> **Fireside trivia.** `std/map` is itself written in Ember — a generic struct over an array of
+> `Option<MapEntry<K, V>>` buckets, bounded `Map<K: Hash + Eq, V>`, with open-addressing and
+> linear probing, doubling when it gets 70% full. It dispatches each key's own `hash` and `eq`
+> through witnesses it stores per instance — which means the map isn't just *using* the language's
+> generics, arrays, enums, and methods, it's using the brand-new **bounds-on-generic-structs**
+> feature to do it. The standard library's dictionary is written in the language it ships with, and
+> it's the proof that bounded generic structs work, because it's made of one. (The underlying string
+> hash is FNV-1a, a 1991 design beloved for being about five lines long and good enough for almost
+> everything.)
+
+**`std/set`** — a generic hash set, `Set<K: Hash + Eq>`. It is `std/map`'s twin: the same
+open-addressing table with linear probing and doubling past a 0.7 load factor, but storing only
+keys — no value. Membership, insertion, and iteration are amortised O(1)/O(n), and adding a key
+that's already present is a no-op. Like the map, it's written in Ember and is itself a proof that
+bounded generic structs work.
+
+The next several modules are the answer to a fair question — *can you build a real, networked,
+graphical program in this language?* — and each is small, pure where it can be, and written in
+Ember over a thin native base:
+
+**`std/json`** — a real JSON parser and serializer. It dogfoods the language hard: a JSON value is
+a recursive `enum Json` walked with `match`, and an object keeps its members in insertion order so
+serialization round-trips. You build a tree (`json.obj`, `json.arr`, `json.str`, `json.num`) and
+`json.stringify` it, or `json.parse` a string back into the enum — and escaping (quotes, newlines,
+unicode) is the library's job, not yours.
+
+**`std/markdown`** — parses Markdown into a list of **blocks** — paragraphs, headings, bullets,
+blockquotes, fenced code. The block model is, again, an `enum`, so a renderer is one exhaustive
+`match`: exactly the language's own machinery doing exactly what it's for. Any Ember GUI can reuse
+it — a chat transcript, a docs viewer, a note app.
+
+**`std/highlight`** — syntax highlighting as a *lexer* that emits coloured spans instead of
+compiling. A code string becomes a flat list of `Span`s, each tagged with a `Kind` the renderer
+maps to a colour. It's a pragmatic C-family tokeniser (identifiers and keywords, numbers, strings,
+line and block comments), and it pairs with `std/markdown` so a fenced code block comes out
+highlighted.
+
+**`std/http`** — HTTP/HTTPS as a thin layer over the C FFI (libcurl). Two shapes share one binding:
+`http.post(url, headers, body)` makes a blocking request and hands back the whole response body as a
+string; or you open a **streaming** pull — `http.open(...)` returns a handle, `http.next(h)` yields
+body chunks as the network delivers them (`""` once the transfer ends), `http.status(h)` is the HTTP
+code, and `http.close(h)` frees it. The handle is a linear `Ptr` ([Chapter 16](#chapter-16--talking-to-c)),
+so the compiler makes you close it exactly once, on every path. It links only under the networking
+build (`make net`), the same way the UI modules need the graphics build.
+
+**`std/sse`** — a Server-Sent Events decoder, the streaming layer that sits on top of `std/http`.
+You feed it the raw response-body chunks `http.next` hands you; it returns the **complete** events
+framed so far and buffers the trailing partial across feeds. That's what turns a token-by-token API
+stream into a clean sequence of events your loop can act on.
+
+Then the graphics and UI stack, all resting on the immediate-mode idea from
+[Chapter 13](#chapter-13--memory-the-quiet-way) — *the UI is a pure function of state, redrawn
+fresh every frame, with no retained widget tree to keep in sync* — which is precisely why it stays
+clean under Ember's ownership model:
+
+**`std/draw`** — immediate-mode drawing over the native graphics backend: open a window, then each
+frame clear it and issue primitives (rectangles, text, lines). Colours are packed `0xRRGGBB` ints;
+key codes follow the backend. There is no retained scene, so your app state is just your own Ember
+values.
+
+**`std/ui`** — an immediate-mode widget toolkit over `std/draw`: buttons, labels, text fields,
+checkboxes, sliders. A `Ui` value carries the small slice of cross-frame state immediate mode
+needs — the layout cursor, this frame's input snapshot, and which widget is *hot* (hovered) or
+*active* (being pressed).
+
+**`std/layout`** — a small **flexbox** solver. You build an ephemeral tree of boxes for one frame,
+call `solve()` with the root rectangle, and read each box's computed rect. It's pure — ints,
+arrays, and structs, no rendering — so the layout maths is testable on its own, without ever
+opening a window.
+
+**`std/flare`** — the declarative, component-style layer that ties the three above together:
+components as functions, props, local state, declarative composition. It gets its own chapter —
+[Chapter 25](#chapter-25--flare-interfaces-you-can-read).
+
+---
+
+## Chapter 16 — Talking to C
+
+Sometimes you need a function that already exists in C — a maths routine, a system call, a
+library. Ember reaches across to C through an **`extern "c"` block**, where you declare the
+foreign function using ordinary Ember syntax:
+
+```ember
+extern "c" {
+    fn atan2(y: f64, x: f64) -> f64
+}
+
+fn main() -> int {
+    return to_int(atan2(1.0, 1.0) * 1000.0)   // pi/4 ≈ 0.785, scaled → 785
+}
+```
+
+```
+=> 785
+```
+
+Once declared, you call it like any other function. The first slice of the FFI targets the C
+maths library (`libm`, which ships with every C runtime, so it adds no dependency): `sin`,
+`cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`, `log2`, `log10`, `sinh`, `cosh`,
+`tanh`, `cbrt`, `trunc`, `hypot`, `fmod`. (You won't need `extern` for `sqrt`, `pow`, `abs`,
+`floor`, `ceil`, `round` — those are already built in.)
+
+**The `extern` declaration is the trust boundary.** There's no separate `unsafe` keyword in
+Ember; the signature you write *is* the contract the compiler type-checks against. That's the
+one place Ember's guarantees stop and you're vouching for the C side — so if you declare a
+signature that doesn't match the real C function, you've told a lie the compiler can't catch.
+Keep your declarations honest.
+
+Structs cross the boundary too, by value, as long as they're all-scalar — a
+`struct Vec2 { x: f64  y: f64 }` lines up with a C `struct { double x, y; }`:
+
+```ember
+struct Vec2 { x: f64  y: f64 }
+extern "c" {
+    fn cvec2_len(v: Vec2) -> f64            // struct in, scalar out
+    fn cvec2_add(a: Vec2, b: Vec2) -> Vec2  // struct in AND struct out
+}
+```
+
+There's no marshalling library involved: Ember flattens the struct to its scalar fields, and a
+tiny C wrapper reassembles a real C struct and passes it by value — so the *system C compiler*
+generates the platform's exact calling convention for you. No hand-rolled register juggling, no
+`libffi`.
+
+### Pointers, buffers, and handles
+
+Scalars and structs are enough for a maths library, but binding *real* C — file I/O, string
+routines, anything that takes a pointer — needs three more shapes to cross the boundary. They all
+now do, and the trick that keeps them safe is that each one is **borrowed for the duration of the
+call**: Ember lends C a pointer, C uses it while the call runs, and Ember keeps ownership and frees
+nothing C owns.
+
+| Ember type | Arrives in C as | Notes |
+|------------|-----------------|-------|
+| `string` | `const char*` | the string's bytes, NUL-terminated; read-only |
+| `[u8]` (any packed scalar array) | a buffer pointer | the array's contiguous native storage |
+| `mut [u8]` | a *writable* buffer | C may fill the elements in place |
+| `Ptr` | an opaque handle (`FILE*`, `void*`, …) | round-trips to and from C; never dereferenced in Ember |
+
+A `Ptr` is the interesting one: it's a handle you *receive* from C (say, from `fopen`), hand back
+to C (`fread`, `fclose`), and never look inside from Ember — its lifetime is C's business. And the
+compiler helps you not botch that lifetime: a `Ptr` is **linear** — you must use it **exactly once**.
+*At most once:* it's move-only, so an extern function that *takes ownership* declares it `move` —
+`fn fclose(move f: Ptr)` — and that **consumes** it. Close the same handle twice (`fclose(f);
+fclose(f)`) and the second is a compile error, "use of `f` after it was moved" — a C double-free
+caught before it runs. *At least once:* an owned handle you **never** close is a compile error too —
+"this `Ptr` is opened but not closed on this path" — and the checker holds you to it on *every*
+branch, early `return`, and `?`. So the two classic FFI footguns — double-close and leak — are both
+gone, with no runtime cost. (A handle has no destructor, so it can't auto-close and can't be stashed
+in a struct/array/`Option`/`Map` either; keep it in a local and close it, or return it. The
+null-handle case is easy: `fclose(NULL)` is a safe no-op, so the idiom is open → use under a
+null-check → one unconditional close.) Borrowing calls (`fread`/`fwrite`) leave the `Ptr` plain, so
+you can keep using it. Put the four together and you can drive libc directly.
+Here's the heart of the shipped `examples/16_ffi.em`, which writes a file and reads it straight back:
+
+```ember
+extern "c" {
+    fn strlen(s: string) -> i64
+    fn fopen(path: string, mode: string) -> Ptr
+    fn fwrite(buf: [u8], n: i64, f: Ptr) -> i64
+    fn fread(mut buf: [u8], n: i64, f: Ptr) -> i64   // C writes into the buffer
+    fn fclose(move f: Ptr) -> i64
+}
+```
+
+```
+wrote 5 bytes to /tmp/ember_ffi_demo.bin
+read back 5 bytes: EMBER
+strlen("EMBER") = 5
+=> 5
+```
+
+`fopen` hands back a `Ptr`; `fwrite` borrows a `[u8]` payload; `fread` takes a `mut [u8]` and the C
+side fills it in place; `strlen` borrows a `string` as a `const char*`. Passing a heap value to a C
+call (a string literal, a freshly built array) lends it for the call and reclaims it right after, so
+nothing leaks.
+
+One returning direction *is* handled now, and it's how `std/http` brings a whole response body
+home: a C function that returns a `char*` can be declared to **return a `string`**. Ember copies the
+bytes into an owned Ember string on the way back and lets C free its own buffer — the safe "copy on
+return" rule, with no ownership puzzle to get wrong. That's exactly what
+`fn http_post(url: string, headers: string, body: string) -> string` does inside `std/http`.
+
+What's still left out is the *other* shapes of returned memory: a non-string `malloc`'d **buffer**
+(a `[u8]` has no NUL terminator, so it needs a length channel first) and the "Ember **adopts** the
+raw pointer and frees it later" form for APIs that transfer ownership across. Both need an explicit
+ownership rule at the boundary, so for a buffer the workaround stays the `fread` pattern above: hand
+C a `mut [u8]` to write into. Arbitrary dynamic linking is likewise future work. (And a small,
+honest wrinkle for [Chapter 18](#chapter-18--the-verification-loop): `--emit=replay` records a C
+call's scalar *result* but not the bytes it writes into a borrowed buffer, so a buffer-reading FFI
+program replays as `diverged` — replay being scrupulously honest that an effect escaped its capture,
+rather than faking a reproduction.)
+
+> **Fireside trivia.** `extern "C"` is one of the most quietly important incantations in
+> systems programming. It exists because C++ "mangles" function names (encoding types into the
+> symbol) while C does not, so `extern "C"` means "don't mangle this — speak plain C." Ember
+> borrows the exact spelling, partly for the C/C++/Rust muscle memory and partly because, when
+> a tool or a model reads `extern "c"`, it knows precisely what it's looking at. Familiar
+> punctuation is a feature, not a lack of imagination.
+
+---
+
+# Part IV — Knowing You're Right
+
+This part is about a single idea: stating what your code is supposed to do in a way the machine
+can check, fuzz, prove, and replay. None of those four moves is new on its own — contracts,
+property-based testing, theorem-proving, and record-replay all have long histories — but wiring
+them into one loop around a single executable contract is the bet the next four chapters build up.
+
+## Chapter 17 — Contracts
+
+A **contract** is a statement of what a function promises, written right next to its signature,
+in ordinary Ember. There are two halves: `requires` clauses (preconditions — what must be true
+when you call it) and `ensures` clauses (postconditions — what will be true when it returns). An
+`ensures` clause may use the special name `result` for the return value.
+
+```ember
+fn clamp(x: int, lo: int, hi: int) -> int
+    requires lo <= hi             // precondition: checked on entry
+    ensures result >= lo          // postconditions: checked before every return,
+    ensures result <= hi          // with 'result' bound to the returned value
+{
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+```
+
+That's not a comment. It's executable. In a normal (debug) build, `requires` is checked the
+moment the function is entered, and every `ensures` is checked just before each `return`. If one
+fails, the program stops with a message that tells you exactly which clause, in which function:
+
+```ember
+fn pos(x: int) -> int
+    requires x > 0
+{
+    return x
+}
+
+fn main() -> int { return pos(-5) }
+```
+
+```
+emberc: runtime error: precondition failed in 'pos' (requires, line 1)
+```
+
+A contract is just a `bool` expression, so the full language is available — including calling
+your own predicate functions. You can write `requires is_sorted(xs)` and define `is_sorted`
+normally. (Contracts should *read* their inputs, not change them.) Here's the shipped
+`examples/07_contracts.em`, which specifies Euclid's GCD precisely — the result is positive and
+divides both inputs:
+
+```ember
+fn gcd(a: int, b: int) -> int
+    requires a > 0
+    requires b > 0
+    ensures result > 0
+    ensures a % result == 0
+    ensures b % result == 0
+{
+    var x = a
+    var y = b
+    loop {
+        if y == 0 { return x }
+        let t = x % y
+        x = y
+        y = t
+    }
+}
+```
+
+Those three `ensures` clauses are a real, checkable specification of "is a common divisor," not
+a vague comment hoping to stay true.
+
+### `assert`, for checks inside a function
+
+For an invariant that should hold *mid-function* rather than at its boundary, there's
+`assert(cond)` (or `assert(cond, "message")`). It lowers to the same machinery as a contract, so
+a failure is the same kind of structured event, not a bare crash.
+
+### The bit that makes it free in production
+
+Contracts are checked in **debug** builds — the default. A **`--release`** build *elides them
+entirely*: zero runtime cost. So you get correctness-checking while you develop and pay nothing
+when you ship. Watch the same broken contract simply vanish under `--release`:
+
+```
+emberc --emit=run           bad.em     # precondition failed in 'pos' ...
+emberc --emit=run --release bad.em     # => 6   (the check is gone)
+```
+
+This is the proven `debug_assert` model: the safety net is up the whole time you're working, and
+folded away for the performance run. (Type-checking always happens, in every build — a contract
+that isn't a `bool` is a compile error no matter the profile. Only the *runtime check* is what
+`--release` drops.)
+
+> **Fireside trivia.** Design by contract dates to Bertrand Meyer and the Eiffel language in
+> the 1980s, named by analogy with business contracts: the caller promises the precondition,
+> the function promises the postcondition, and if both keep their word the program is correct.
+> The idea spent decades admired-but-niche. What's new in Ember isn't contracts themselves —
+> it's *fusing* them with a machine-readable trace and automatic testing, which is the next
+> chapter, and the whole reason they're here.
+
+---
+
+## Chapter 18 — The Verification Loop
+
+A contract is a specification the machine understands. Once you have that, the compiler can do
+three things with it.
+
+### `--emit=check`: fuzz your contracts automatically
+
+Your contract says what *should* be true. So the compiler can go looking for an input that makes
+it *false*. `emberc --emit=check` generates many inputs that satisfy a function's `requires`,
+runs the function, and reports the first input that violates an `ensures` (or an `assert`) — as a
+concrete counterexample.
+
+Point it at the (correct) contracts example and everything passes:
+
+```
+emberc --emit=check examples/07_contracts.em
+```
+```
+check gcd: ok (300 cases)
+check clamp: ok (300 cases)
+checked 2 function(s): 2 passed, 0 failed
+```
+
+Now write a contract that's a little too hopeful — claiming doubling a number always makes it
+bigger (false for zero and negatives) — and watch the compiler find the hole:
+
+```ember
+fn dbl(x: int) -> int
+    ensures result > x
+{
+    return x + x
+}
+```
+```
+emberc --emit=check bad.em
+```
+```
+check dbl: FAILED
+  counterexample: dbl(0)  =>  postcondition failed in 'dbl' (ensures, line 2)
+checked 1 function(s): 0 passed, 1 failed
+```
+
+It didn't just say "this is wrong" — it handed you `dbl(0)`, the simplest input that breaks it.
+A few things worth knowing: `requires` defines the valid domain (inputs that fail a precondition
+are out of scope, not failures); struct and array parameters get fuzzed too; counterexamples are
+**shrunk** toward the simplest failing case; and generation is **deterministic** (a fixed seed),
+so you get the *same* counterexample every run — perfect for a regression test, or for a
+colleague to reproduce.
+
+### `--emit=prove`: prove there's no counterexample
+
+Fuzzing can find a bug; it can't certify the absence of one. For contracts in a decidable
+fragment — **linear integer arithmetic** over a function's integer parameters — Ember can
+*prove* the postcondition holds for all inputs, with no external solver:
+
+```ember
+fn add_nonneg(a: int, b: int) -> int
+    requires a >= 0
+    requires b >= 0
+    ensures result >= 0
+{
+    return a + b
+}
+```
+```
+emberc --emit=prove add_nonneg.em
+```
+```
+prove add_nonneg: ensures @line 5 — PROVED
+proved 1 of 1 ensures clause(s); 0 to check
+```
+
+The prover is **sound and never optimistic**: anything outside its fragment (branches,
+multiplication of variables, calls, non-integer parameters) is reported as *not proved* and
+politely handed off to `--check`. It will never call a false contract proved. Run it on the GCD
+example, whose loop and `%` are well outside linear arithmetic, and it says so honestly:
+
+```
+prove gcd: ensures @line 17 — not proved (use --check)
+```
+
+So the workflow is a hierarchy: **prove what's decidable, fuzz the rest, and** — next — **replay
+anything that fails.**
+
+### `--emit=replay`: make any run reproducible
+
+The bane of debugging is the bug you can't reproduce. Ember's nondeterminism comes from a small,
+known set of sources — `random()`, the clock, external reads, and C calls — so the runtime can
+*record* every nondeterministic value a run consumes and *replay* them to reproduce that run
+exactly. `--emit=replay` runs your program twice (once recording, once replaying) and checks the
+two runs are byte-for-byte identical:
+
+```
+emberc --emit=replay program.em
+```
+```
+replay: deterministic — 5 nondeterministic event(s) recorded (5 random, 0 clock, 0 read_line, 0 read_file, 0 ffi); both runs identical
+```
+
+If the two runs *disagree*, the program has a source of nondeterminism the runtime doesn't yet
+capture — which is itself a useful thing to discover. Concurrency comes along for free: replay
+uses the deterministic serial scheduler, so even a `nursery`/`spawn`/channel program replays
+identically.
+
+Put the three together — prove, check, replay — and you have a closed correctness loop: state
+what the code should do, have the machine prove it or hunt counterexamples, and reproduce any
+failure on demand. Plenty of languages offer one or two of these; having all three hang off the
+same executable contract, in one toolchain, is what Ember is reaching for.
+
+> **Fireside trivia.** The prover's engine is **Fourier–Motzkin elimination**, a method for
+> deciding systems of linear inequalities that Joseph Fourier sketched in the 1820s — yes, the
+> heat-equation, the-frequencies-of-the-universe Fourier — and that Theodore Motzkin
+> rediscovered and formalised in his 1936 thesis. It sat as a piece of pure mathematics for the
+> better part of a century before turning out to be exactly the tool for proving little integer
+> contracts in a programming language two hundred years later. You never know what the maths is
+> for when it's written down.
+
+---
+
+## Chapter 19 — The Tape, and Errors as Data
+
+The final piece of Ember's "knowing you're right" story is *observability*: the language is
+built so that what your program does, and what the compiler thinks of it, are available as
+structured data — not just text for a human to squint at.
+
+### The execution tape
+
+Run any program with `--tape` (or `--emit=trace`) and Ember writes a **tape**: one JSON object
+per executed instruction, in order, recording the function, the instruction offset, the opcode,
+the *source line*, and a snapshot of the value stack at that moment.
+
+```
+emberc --tape program.em
+```
+```
+{"fn":"main","ip":0,"op":"CONST","line":6,"stack":[]}
+{"fn":"main","ip":2,"op":"CALL","line":6,"stack":[3]}
+{"fn":"dbl","ip":0,"op":"GET_LOCAL","line":4,"stack":[3]}
+{"fn":"dbl","ip":2,"op":"GET_LOCAL","line":4,"stack":[3,3]}
+```
+
+It's **observer-only** — recording a tape never changes how the program runs — and it costs
+essentially nothing when you don't ask for it. You can read it yourself to follow a run
+step-by-step, or hand it to a tool (or an AI) to debug a run as data. When a contract is violated,
+a structured `contract_violation` event lands on this same tape, so a spec failure isn't a dead
+end — it's a record of exactly what happened, on what values.
+
+### Errors as data
+
+Compile errors get the same treatment. By default they're written for humans, in your program's
+own terms, with a fix suggestion — you've seen plenty in this book. But add `--diagnostics=json`
+and every error comes out as a JSON object instead:
+
+```
+emberc --emit=run --diagnostics=json prog.em
+```
+```
+{"severity":"error","file":"prog.em","line":5,"col":16,"message":"use of 'a' after it was moved","near":null,"help":"a move transfers ownership; pass it without `move` to borrow it instead, or make a copy before the move","note":{"line":4,"col":21,"message":"value moved here"}}
+```
+
+Same information as the friendly text version — file, line, column, message, a `help` fix, and a
+secondary `note` pointing at the related location — but as a structure a program can parse and
+act on without scraping strings.
+
+Why would a language make its errors and traces machine-readable? Because Ember is built
+**LLM-first** — for a world where a lot of code is written and run by models — and a model works
+better with "here is precisely what's wrong, as data, and here's the fix" than with prose it has
+to parse. Everything in this part — contracts as specs, fuzzing into counterexamples,
+deterministic replay, the tape, JSON diagnostics — serves the same structured feedback loop, one
+a machine or a human can close on its own.
+
+> **Fireside trivia.** Ember's tape is emitted from inside the VM's instruction dispatch, so it
+> grows automatically with every new opcode — the trace can't fall behind the language, because
+> emitting it is part of how the language runs. Observability that's built in rather than bolted
+> on tends to look like paranoia right up until the first time it saves your afternoon.
+
+---
+
+## Chapter 20 — Crucible: The Memory Fuzzer
+
+[Chapter 18](#chapter-18--the-verification-loop) showed you a machine that hunts for a *logic*
+bug: `--emit=check` invents inputs to a function until one of its contracts turns false. Crucible
+is the twin of that idea, pointed at *memory*. Instead of inputs to one function it invents whole
+**programs** — entire `.em` files — and runs each one through a battery of detectors that watch
+what the runtime does with memory: whether a value is freed twice, leaks, is read after it has
+been freed, or quietly comes back *wrong*. Logic correctness and memory correctness are different
+problems, so Ember hunts them with two different tools.
+
+Crucible is a build-time developer tool. It lives in `tools/` (a generator, `crucible.c`, and a
+driver, `crucible.sh`), it is never shipped inside `emberc`, and you run the whole thing with one
+command:
+
+```
+make crucible
+```
+
+That builds everything it needs and sweeps a default of 150 seeds; when you want a shorter or
+longer run, call the driver directly with a count — `tools/crucible.sh 120`. Either way, a green
+run ends like this and exits `0`:
+
+```
+crucible: 120 seeds → 120 clean, 0 distinct (0 NEW).
+crucible: ✓ no new memory faults.
+```
+
+A run that turns up something new exits `1` and tells you exactly where the evidence is. That is
+the entire contract: **a clean exit means the language could not be made to mishandle memory
+across the combinations Crucible knows how to build; a non-zero exit hands you a minimal program
+that proves otherwise.**
+
+### Why a fuzzer, and not just more tests
+
+Every memory bug Ember has ever had lived at a *combination* of features that, taken one at a
+time, all worked: a value-struct double-freed when it was borrowed into a multi-slot parameter; a
+string interpolation that leaked its intermediate pieces; a field assignment through an array
+index; a value-struct double-freed when shared through an erased generic. Nobody sits down and
+writes a test for "a struct with a string field, stored as the *value* of a `Map`, read back
+inside a loop, and then interpolated" — because nobody *thinks* of it. Each of those bugs was
+found the hard way, *reactively*, when a real program happened to walk into the combination and
+crashed on the way out.
+
+Crucible's job is to walk into those combinations *first*, by the hundred, automatically. The
+principle the source states for itself is **"no knowledge lost"**: every shape that has ever
+bitten the language is inside the space the generator samples, so the same class of bug cannot
+come back unseen. On its first run it surfaced a bug where a `Map` whose value is an array handed
+back a corrupted, empty view — a combination no hand-written test had thought to try.
+
+> **Why this needs its own tool.** Property-based testing targets your *logic*, the way
+> `--emit=check` does. Crucible targets the *runtime memory model itself*: it pits two backends
+> against each other and watches the allocator for double-frees and leaks. Ember frees memory
+> deterministically from tracked ownership ([Chapter 13](#chapter-13--memory-the-quiet-way)), and
+> that deterministic freedom is exactly the thing that needs a fuzzer pointed at it.
+
+### The generator: one seed, one program
+
+The generator takes a seed and prints one valid Ember program to standard output. Same seed, same
+program, every time — so every finding is perfectly reproducible. You can watch it work:
+
+```
+build/crucible 1 30
+```
+
+The `1` is the seed; the `30` is a loop trip-count the driver later scales up and down for the
+leak check. Each program is built from self-contained operations — one function per danger
+pattern — and every one of them folds every value it touches into a running `acc`:
+
+```ember
+fn op0() -> int {
+    var acc = 0
+    var m = map.Map<string, S>{ buckets: [], count: 0 }
+    m.set("k0", S { a: 98, s: "z" })
+    m.set("k1", S { a: 53, s: "q" })
+    m.set("k0", S { a: 31, s: "ab" })
+    match m.get("k0") { case Some(v) {
+    acc = acc + v.a + v.s.len()
+    } case None {} }
+    match m.get("k1") { case Some(v) {
+    acc = acc + v.a + v.s.len()
+    } case None {} }
+    return acc
+}
+```
+
+That one stores a struct as a `Map` value, overwrites a key, reads two keys back, and folds the
+recovered `a` field *and* the heap string's length into `acc` — so the heap leaf is exercised, not
+just the scalar. `main` then sums every `opN()` and prints the total. That total is the keystone
+of the whole design: it is a **checksum** of every value the program touched. If a value is
+silently dropped, duplicated, or read back wrong, the number changes — which is how Crucible
+catches *wrong answers*, not merely crashes. Run the seed-1 program straight through the VM:
+
+```
+emberc --emit=run seed1.em
+```
+```
+3722=> 0
+```
+
+The `3722` is the checksum `main` printed; `=> 0` is the value it returned. (`print` adds no
+newline, so the two land on the same line.)
+
+What does the generator deliberately reach for? The places memory bugs live:
+
+- **Struct shapes** — all-scalar, with a heap `string` field, with a nested struct, or with both.
+- **Erased generic containers** — those structs placed into `[T]`, `Map<string, T>`, `Map<string,
+  [T]>`, and `Option<T>`, including nested combinations, built and read back through generic
+  helpers like `fn c_pair<T>(a: T, b: T) -> [T]` and `fn c_keep<T>(move x: T) -> T`.
+- **Movement** — passed by `move` and by borrow, returned, read back, mutated through an array
+  index (`arr[i].field = …`), and interpolated (`"row{i}-x{i}"`), inside loops and across
+  reassignment.
+
+That list is not arbitrary. It is the union of every feature-combination that has ever produced a
+memory bug in Ember.
+
+### The five oracles
+
+The driver runs each generated program through five independent detectors. In fuzzing these are
+called *oracles*, because each one knows how to recognise a particular kind of wrong. The driver
+builds the variant compilers it needs (a drop-trace build, an AddressSanitizer build) on demand
+the first time you run it.
+
+| Oracle | What it catches | How |
+|--------|-----------------|-----|
+| **Double-drop detector** | A value freed twice | A compiler built with `-DEMBER_DROP_TRACE` stamps a sentinel after each reclaim and aborts if it ever frees that object again |
+| **VM fault** | A runtime fault (bad index, etc.) | Runs under the VM and looks for `runtime error: …` |
+| **ASan** | Use-after-free, buffer overflow, double-free | A compiler built with AddressSanitizer (`make asan`) |
+| **RSS leak** | Memory that grows super-linearly | Runs the same seed at 50 and 6000 loops and compares peak resident memory |
+| **VM↔native differential** | A *wrong answer*, or a native-only crash | Compiles the program to a native binary, runs it, and compares output **and** exit code against the VM |
+
+There is a sixth thing it watches for, quietly: if the generator ever emits a program that doesn't
+*compile*, that is a bug in the *generator* — an over-reach past what the language allows — and
+it's reported as `gen-compile-error` so it can never be mistaken for a real finding.
+
+Why five, and why these? Because each one sees something the others can't. The runtime's pool
+allocator recycles memory instead of calling `free`, so a plain ASan build can read a
+use-after-free as perfectly valid (recycled) memory and miss it entirely — which is precisely why
+the double-drop detector exists, stamping a sentinel that survives recycling. The differential is
+the only oracle that catches a *silently wrong answer*: a program that runs cleanly, leaks
+nothing, double-frees nothing, and still prints a different checksum on the two backends. The leak
+oracle is the only one that catches unbounded growth in a program that is otherwise correct.
+Memory safety is not a single property, so it does not get a single detector.
+
+### Findings: signatures, shrinking, and minimal repros
+
+When an oracle fires, the driver does three useful things rather than merely shouting.
+
+First, it reduces the failure to a **signature** — a short string such as `vm-fault:runtime error:
+array index out of bounds`, or `double-drop:type_id=3`, or `diff:VM-ne-native`. Distinct
+signatures are distinct findings; the same signature seen again is the same bug, reported once.
+
+Second, for each new signature it **shrinks** the program to a minimal reproducer: it greedily
+deletes operations — the `+ opK()` terms in `main` make this trivial — for as long as the
+signature still holds, and saves the result under `tools/crucible-finds/`. So you are never handed
+a hundred-line generated program; you get the smallest one that still fails. Here is a real one, a
+differential finding shrunk from its original two operations down to a single guilty loop:
+
+```ember
+// crucible seed=3 shape=3 ops=2 loops=30 — generated; do not edit.
+import "std/map" as map
+
+struct Inner { x: int }
+
+struct S {
+    a: int
+    s: string
+    inner: Inner
+}
+
+fn c_pair<T>(a: T, b: T) -> [T] { return [a, b] }
+fn c_keep<T>(move x: T) -> T { return x }
+
+
+fn op1() -> int {
+    var acc = 0
+    var i = 0
+    loop {
+        if i == 30 { break }
+        let xs = c_pair(S { a: 65, s: "hello", inner: Inner { x: 31 } }, S { a: 5, s: "longerstring", inner: Inner { x: 18 } })
+        acc = acc + xs[0].a + xs[1].a
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> int {
+    var total = 0
+    total = total + op1()
+    print("{total}")
+    return 0
+}
+```
+
+Third, it prints one line per distinct finding — the signature, the seed, and the repro path:
+
+```
+── [NEW]   [diff:VM-ne-native]  seed=3  → tools/crucible-finds/find2_diff_VM_ne_native.em  (minimal: 1 op)
+```
+
+When the oracle that fired was the double-drop detector, the underlying evidence — written by the
+`-DEMBER_DROP_TRACE` runtime — has this shape, and the sentinel `0x5EAD5EAD` is the giveaway:
+
+```
+*** EMBER DOUBLE-DROP obj=<addr> type=<n> ***
+STRUCT type_id=<n> field_count=<n>
+first drop site: <addr>
+```
+
+It prints *both* drop sites — this one and the one it stashed the first time — because for a
+double-free the question is never "where was it freed?" but "where were the *two* places that each
+thought they owned it?"
+
+### The baseline: failing only on what's new
+
+A bug you have already filed shouldn't paint every future run red. `tools/crucible-known.txt` is
+the **baseline**: one signature per line, with `#` comments allowed. A signature listed there is
+reported as `[known]` and does *not* fail the run; only a signature that is *not* listed counts as
+`NEW` and flips the exit code to `1`. The discipline, stated in the file's own header, is to
+remove a line only when the bug is actually fixed **and** a clean Crucible run confirms it. As of
+this writing the file is empty: the two erased-generic double-free bugs that once lived there are
+fixed on both backends, and Crucible is green.
+
+### Working a finding
+
+When `make crucible` hands you a `NEW` finding, the loop is short:
+
+1. **Open the minimal repro** under `tools/crucible-finds/`. It is a real `.em` file, already as
+   small as the tool could make it.
+2. **Reproduce it by hand under the oracle that fired**, so you can watch it happen. For a memory
+   fault, reach for the tape — build the ASan + drop-trace compiler and run the repro under it:
+
+   ```
+   make asan-trace
+   ASAN_OPTIONS=detect_leaks=0 build/emberc-trace --emit=run tools/crucible-finds/find2_diff_VM_ne_native.em
+   ```
+
+   For a `diff:VM-ne-native`, run both backends and compare the answers directly:
+
+   ```
+   emberc --emit=run repro.em                  # the reference answer (the VM)
+   emberc -o /tmp/repro repro.em && /tmp/repro # the native answer
+   ```
+3. **Fix the bug, then add a regression test** under `tests/` so it stays fixed — a fix without a
+   test that exercises it isn't finished.
+4. **Confirm green.** Remove the signature from `crucible-known.txt` if it was baselined, and run
+   `make crucible` again until it reports `0 NEW`.
+
+That is the same discipline the rest of Part IV asks for — reproduce on the smallest possible
+evidence, fix, lock it in with a test — applied to the one category of correctness a contract
+cannot describe: what the runtime does with your memory.
+
+> **Fireside trivia.** The double-drop detector's sentinel is the 32-bit value `0x5EAD5EAD`.
+> Squint at it: `5EAD5EAD` reads as *"dead dead"* — a value freed once is dead, and a value freed
+> twice is dead twice. The pool never touches an object's refcount field after reclaiming it, and
+> a genuine re-allocation clears it, so if the runtime is about to free an object and finds
+> `0x5EAD5EAD` still sitting in that field, it knows for certain it's staring at the same corpse a
+> second time. A good sentinel is a number that could never arise by accident *and* that tells you
+> what it means the moment you read it in a debugger at two in the morning.
+
+# Part V — Reference
+
+## Chapter 21 — The Whole Toolbox
+
+Everything `emberc` can do to a program, in one place. The general shape is
+`emberc [flags] <file.em>`.
+
+| Command | What it does |
+|---------|--------------|
+| `emberc --emit=run file.em` | **Compile and execute.** The one you'll use most. Prints output, then `=> <value>`. |
+| `emberc --emit=tokens file.em` | Show the token stream (what the lexer saw). |
+| `emberc --emit=ast file.em` | Show the parsed syntax tree. |
+| `emberc --emit=bytecode file.em` | Show the compiled bytecode, annotated with source lines. |
+| `emberc --emit=trace file.em` | Execute and emit the execution **tape** (JSON Lines). |
+| `emberc --tape file.em` | Alias for `--emit=trace`. |
+| `emberc --emit=check file.em` | **Property-fuzz** every checkable contract; report counterexamples. |
+| `emberc --emit=prove file.em` | **Statically prove** the contracts in the decidable (linear-integer) fragment. |
+| `emberc --emit=replay file.em` | Record-and-**replay** the run; verify it's deterministic. |
+| `emberc --emit=docs file.em` | Render `///` doc comments to a Markdown reference page. |
+| `emberc --emit=c file.em` | **Lower to C.** Print the standalone C translation unit the native backend produces. |
+| `emberc -o <bin> file.em` | **Compile to a native binary.** Emit that C and link it against the runtime into a standalone executable — no VM. |
+
+The last two are the native backend, and they get their own chapter:
+[Chapter 22: Compiling to Native](#chapter-22--compiling-to-native).
+
+Two flags combine with the above:
+
+| Flag | Effect |
+|------|--------|
+| `--release` | Elide contract and `assert` checks (zero runtime cost). |
+| `--diagnostics=json` | Emit compile errors as JSON objects instead of friendly text. |
+
+Exit codes, for scripting: `0` success · `64` you used the compiler wrong · `65` your program
+has an error (lexical, syntax, type, or runtime) · `66` the source file couldn't be read.
+
+---
+
+## Chapter 22 — Compiling to Native
+
+Every program in this book so far has run the same way: the compiler turns your `.em` file into
+bytecode, and a small virtual machine executes it. That VM is the beating heart of Ember — it is
+where contracts are checked, where the tape is recorded, where `--emit=prove`, `--emit=check` and
+`--emit=replay` live. It is the language's **reference semantics**: the definition of what an Ember
+program *means*.
+
+But a virtual machine is not how you *ship* software. For that, Ember has a second path: it can
+lower your program to **C**, hand that to the system C compiler, and produce a **standalone native
+binary** — a real executable, no interpreter, no runtime to install, nothing of Ember left on the
+surface.
+
+### Two commands
+
+The one you'll reach for is `-o`:
+
+```
+emberc -o hello hello.em
+./hello
+```
+```
+the answer is 42
+=> 0
+```
+
+That is a native executable. It links against Ember's small runtime — allocation, the drop
+machinery, strings, arrays, the handful of things the language needs while it runs — and depends on
+nothing else. Run it, ship it, drop it in a container without packing an interpreter alongside it.
+
+If you're curious what Ember handed the C compiler, ask to see it:
+
+```
+emberc --emit=c hello.em
+```
+```c
+// Generated by `emberc --emit=c` from hello.em. Do not edit.
+// The bytecode VM is the reference semantics; tests/native diffs the two.
+#include "ember_rt.h"
+
+// ... your functions, lowered one-to-one ...
+
+int main(int argc, char **argv) {
+    Value r = em_fn_1();
+    if (IS_INT(r)) printf("=> %lld\n", (long long)AS_INT(r));
+    rt_free_objects(&g_em);
+    return 0;
+}
+```
+
+It is ordinary, readable C — your `add` becomes a C function, `a + b` becomes `a + b`, and `main`
+runs your `main` and prints the same `=> <value>` you've seen all book. `--emit=c` writes it to
+standard output so you can read it, pipe it, or compile it by hand; `-o` does the whole job in one
+step.
+
+### One front end, two lowerings — and a referee
+
+Here is the decision that makes this safe. Ember does **not** have two compilers. It has one front
+end — one lexer, one parser, one type checker — and *two lowerings* hanging off the same checked
+syntax tree: the one to bytecode you've used all along, and a new one (in `src/cgen_c.c`) to C. The
+bytecode VM stays the canonical reference semantics; the native binary is the *release* build.
+
+Two implementations of anything drift apart unless something forces them together, so Ember runs a
+**differential test**: a corpus of programs is executed *both* ways — on the VM and as a compiled
+binary — and their output must match, byte for byte. A divergence fails the build.
+
+If that sounds familiar, it should: it is the same bet as the whole of Part IV. Two independent
+implementations that are *required to agree* is a correctness check with real teeth — the compiler
+holding itself to the determinism standard it asks of your code.
+
+### What compiles
+
+Everything the VM accepts. Not "the scalar subset," not "everything except closures" — the whole
+language you've learned in this book lowers to native: value structs (which become **real C
+structs**, used by value, with no heap traffic at all), enums and `match`, arrays and strings,
+erased generics, `Option`/`Result` and `?`, closures and higher-order functions, dynamic dispatch
+through interfaces, the bounded generics that `Map` and `Set` are built from, and the `extern "c"`
+FFI (which simply binds the real libc you were already calling). Even concurrency comes across: a
+program that uses `spawn`/`nursery`/channels is detected automatically and compiled against a
+threaded runtime, so its tasks run on real OS threads.
+
+### The one thing it doesn't do: check your work
+
+A native binary is a **release** build, and that has a precise, deliberate consequence: **contracts
+and `assert`s are not enforced in native output.** They are compiled out, exactly as `--release`
+elides them on the VM.
+
+Watch the difference. Here is a function whose postcondition is a lie — `x` is never greater than
+`x`:
+
+```ember
+fn bad(x: int) -> int
+    ensures result > x
+{
+    return x
+}
+
+fn main() -> int {
+    let y = bad(5)
+    println("y={y}")
+    return 0
+}
+```
+
+Run it on the VM and the contract fires before `main` ever reaches the `println`:
+
+```
+emberc --emit=run bad.em
+```
+```
+emberc: runtime error: postcondition failed in 'bad' (ensures, line 2)
+```
+
+Compile the very same program to native, and it runs straight through — the spec isn't in there
+anymore:
+
+```
+emberc -o bad bad.em && ./bad
+```
+```
+y=5
+=> 0
+```
+
+This is not an oversight; it is the division of labour. **Verification lives on the VM** —
+`--emit=check`, `--emit=prove`, `--emit=replay`, the tape, and runtime contract checks are all
+reference-semantics capabilities, because the VM is where determinism and observability are
+guaranteed. The native binary's job is to be fast and standalone. So the workflow is a clean
+two-step: **prove, check and replay on the VM until you trust the program, then `-o` it for the
+world.** You verify the meaning where meaning is defined, and ship the speed where speed is wanted.
+
+(One practical note while the toolchain is young: a freshly built `emberc -o` finds its runtime
+next to the compiler, in the build tree, so native compilation expects to run from there for now.
+Packaging it for a system-wide install is plumbing, tracked on the
+[Not Yet List](#chapter-23--the-not-yet-list).)
+
+### Why C, and why this matters
+
+Ember lowers from the *typed AST*, not from the bytecode, and targets *C*, not assembly or LLVM IR.
+Both choices point the same way. C gives natural output and a compiler on every platform with no new
+dependency — Ember's empty dependency tree survives intact. And lowering from the AST, where the
+expression `a + b` still exists *as an expression*, rather than from stack-based bytecode, where it
+has been flattened into pushes and pops, is what keeps the generated C readable instead of an
+unrolled interpreter.
+
+That readability matters for a concrete reason: you cannot run an operating system as a guest
+inside a virtual machine that itself needs an operating system to run. A language that means to
+reach bare metal has to be able to leave its VM behind, and emitting readable C is an early step
+in that direction.
+
+> **Fireside trivia.** Compiling a new language *to C* is one of the oldest tricks in the trade, and
+> one of the most quietly successful. The first real C++ "compiler" — Bjarne Stroustrup's **cfront**,
+> at Bell Labs in the early 1980s — was not a compiler at all in the usual sense: it translated C++
+> into C and let the ordinary C compiler finish the job. That is how C++ reached every machine that
+> already had a C compiler, which in 1983 was very nearly all of them. Four decades on, the move
+> still works for the same reason: C is the closest thing computing has to a universal assembler, and
+> a language that learns to speak it inherits the entire world C already runs on. Ember's `--emit=c`
+> is the newest entry in a long and respectable line.
+
+---
+
+## Chapter 23 — The "Not Yet" List
+
+This is the most important chapter for keeping you honest, and it's the promise from the front
+of the book made good. Everything *else* in this book runs today. The things below are
+**designed but not yet built** — they appear in Ember's manifesto, its spec, or its examples as
+intentions, and writing them today will not work. They're listed so you know where the edge is,
+not so you'll use them.
+
+**Types and polymorphism**
+
+- **Generic bounds on methods and enums** — bounds (`<T: Ord>`, including several at once like
+  `<K: Hash + Eq>`) work on free *functions* and on generic *structs* now — that's exactly what the
+  standard `Map<K, V>` is built from — but not yet on a generic struct's individual *methods* or on
+  generic *enums*. (Dynamic dispatch and bounded generic structs both *landed*; see
+  [Chapter 7](#chapter-7--structs-and-methods) and [Chapter 10](#chapter-10--generics-and-interfaces).
+  The only interfaces that can't be value types are non-object-safe ones, and that's a permanent
+  design rule, not a missing feature.)
+- ~~**Move-type keys for `Map`**~~ — **shipped**. A `Map`/`Set` key need only be `Hash + Eq`; a
+  move-type struct key is deep-cloned on store, so there's no `Copy` requirement and no `Clone`
+  ceremony (OFI-042). Closed since this book's first draft.
+- **Monomorphization** — generics are compiled once (erased) today. The specialised
+  per-type-for-speed release path is planned; you won't write code differently for it.
+
+**Ownership and memory**
+
+- **Inferred return lifetimes** — so a borrowed parameter could be returned without `move`.
+  Today, returning an owned value needs `move`.
+- **Full generic-body ownership and reclamation** — values flowing through a *generic* body are
+  reclaimed conservatively (sound, but they leak until program exit rather than freeing eagerly).
+
+**Concurrency**
+
+- **True many-core M:N scheduling** as the default, **cancellation-on-failure**, and
+  **`select`/timeouts** (the non-blocking `try_recv` poll *is* here — it's `select`-with-a-default;
+  it's waiting on *several* channels at once, and timeouts, that aren't), plus **main↔child channel
+  communication during a nursery** (today it's child-to-child; `main` reads results after the
+  nursery).
+
+**Values and text**
+
+- **Top-level `var`** and non-literal global initialisers — top-level `let` *constants* (with
+  literal values) work; general mutable globals don't.
+- ~~**Unicode-aware strings**~~ — **shipped** (June 2026). Strings are fully UTF-8; `chars()` yields
+  one string per code point, and the `cp_*` family (`cp_count`, `cp_at`, `cp_slice`, `cp_prefix`,
+  `cp_insert`, `cp_delete`) gives Unicode-correct editing. Closed by OFI-055.
+- **`u64` literals above 2⁶³−1** — reachable by arithmetic or conversion, but not yet writable
+  as a literal.
+
+**Foreign functions and capabilities**
+
+- **FFI returning C-owned memory** — Ember passes scalars, all-scalar structs, strings
+  (`const char*`), packed buffers (`[u8]`/`mut [u8]`), and opaque `Ptr` handles across to C, and a
+  returned `char*` now comes back as a copied-in `string` (the mechanism `std/http` uses to return a
+  response body). What's left is the *other* returning shapes: a non-string `malloc`'d buffer (needs
+  a length channel) and an "Ember adopts and frees the pointer" form for ownership-transfer APIs —
+  plus arbitrary dynamic linking.
+- **Capabilities** — the designed model for bounding what code may do (gating the FFI, then
+  filesystem and network) is in the manifesto, not the language yet.
+
+**Tooling and language**
+
+- **Separate compilation / incremental rebuilds**, **metaprogramming** (`comptime` vs. macros —
+  deliberately undecided), and making the generic-literal `<` disambiguation fully rigorous
+  (it's a solid heuristic today) are all on the roadmap.
+
+If you stick to the sixteen chapters before this one, you will never write a line that doesn't
+compile for a reason on this list. That's the deal.
+
+> **Fireside trivia.** A language that keeps a careful, public list of what it *can't* do yet is
+> rarer than it should be — the temptation is always to describe the destination as if you'd
+> arrived. Ember keeps two such lists in its own repository: a manifesto of decisions and a
+> dated log of every bug and design flaw found while building (the cheerfully-named
+> "Opportunities For Improvement"). The window that couldn't accept a click on its very first
+> frame; the uninitialised field that corrupted a function call; the generic that freed memory
+> twice — all written down, numbered, and mostly closed.
+
+---
+
+## Chapter 24 — One-Page Cheat Sheet
+
+Everything that runs today, compressed. (Keep the earlier chapters for the *why*; this is the
+*what*.)
+
+```ember
+// --- bindings ---
+let x = 5              // immutable
+var y = 0             // mutable; y = y + 1
+let TOP = 800         // top-level let = compile-time constant (literal only)
+
+// --- functions ---
+fn add(a: int, b: int) -> int { return a + b }
+fn greet(name: string) { println(name) }   // no '-> T' = unit (returns nothing)
+
+// --- numbers ---  int=i64, float=f64; also i8..i64, u8..u64, f32/f64
+let a: u8 = 200       // or 200u8
+let f = to_float(a)   // int -> float; to_int(f) truncates
+let g = u8(300)       // range-checked conversion; out of range -> runtime trap
+// no implicit coercion; integer overflow traps; % needs integers
+a & b  a | b  a ^ b  ~a  a << 1  a >> 1   // bitwise/shift: integer-only, width-aware
+wrapping_add(a, b)  wrapping_sub(a, b)  wrapping_mul(a, b)   // modular 2^width; trapping stays default
+
+// --- strings (UTF-8) ---
+let s = "hi " + name              // + concatenates; == compares by content
+"value is {x}"                    // interpolation; \{ \} for literal braces
+s.len()          // byte length   s.char_count()  // code-point count
+s.chars()        // [string] one per code point   s.bytes()  // [u8]
+s.split(",")  s.parse_int()       // -> Option<int>
+// Unicode-correct ops: cp_count(s)  cp_at(s,i)  cp_slice(s,a,b)  cp_prefix(s,n)
+//                      cp_insert(s,i,ins)  cp_delete(s,i)
+
+// --- bool / control flow ---  (conditions MUST be bool; no truthiness)
+if x < 0 { } else if x == 0 { } else { }
+loop { if done { break }  continue }
+
+// --- arrays ---
+var xs: [int] = []
+xs.append(1)  xs.remove_last()  xs.remove_at(i)  xs.len()  xs[0] = 9   // indexing is bounds-checked
+for v in xs { }            // each element
+for i in 0..n { }          // exclusive range
+for (i, v) in xs { }       // index + element
+let win = xs[1..4]         // borrowed Slice<int> view, no copy; xs.slice(1,4) returns an owned [int]
+let dup = xs.clone()       // explicit deep copy — arrays, structs, Map, Set
+
+// --- structs, methods, interfaces ---
+struct Point { x: int  y: int
+    fn shifted(self, d: int) -> Point { return Point { x: self.x + d, y: self.y } }
+}
+let p = Point { x: 1, y: 2 }      // set every field exactly once
+interface Ord { fn compare(self, other: Self) -> int }   // 'other: Self' -> bound only
+struct V implements Ord { n: int  fn compare(self, o: V) -> int { return self.n - o.n } }
+interface Shape { fn area(self) -> float }               // object-safe (Self only as receiver)
+let shapes: [Shape] = [Circle { ... }, Rect { ... }]     // interface AS A VALUE TYPE
+for s in shapes { println("{s.area()}") }                // dynamic dispatch through a vtable
+
+// --- enums + match ---  (exhaustive, no fallthrough)
+enum Shape { Circle(r: int)  Rect(w: int, h: int)  Origin }
+match s {
+    case Circle(r)  { }
+    case Rect(w, h) { }
+    case _          { }      // catch-all, must be last
+}
+
+// --- errors / optionals ---  (no exceptions, no null; from the prelude)
+fn f(n: int) -> Result<int, string> { if n < 0 { return Err("neg") }  return Ok(n) }
+let v = f(3)?                       // unwrap Ok/Some, or return the Err/None early
+
+// --- generics ---
+struct Box<T> { value: T  fn get(self) -> T { return self.value } }
+fn identity<T>(move x: T) -> T { return x }     // returns its arg -> move
+fn id<T: Copy>(x: T) -> T { return x }          // Copy = everything except struct/array
+fn max<T: Ord>(move a: T, move b: T) -> T { if a.compare(b) >= 0 { return a }  return b }
+struct Map<K: Hash + Eq, V> { /* ... */ }  // bounds on generic structs; several with +
+
+// --- functions as values / closures ---
+fn apply(f: fn(int) -> int, x: int) -> int { return f(x) }
+apply(|n| n + 1, 5)                              // inline lambda: context gives its types
+let h: fn(int) -> int = |n| n * 2                // bound lambda NEEDS the annotation
+
+// --- ownership ---  (borrow by default; mut borrows mutably; move transfers)
+fn read(p: Point) -> int { return p.x }          // borrow
+fn bump(mut p: Point) { p.x = p.x + 1 }          // mutable borrow
+fn take(move p: Point) -> Point { return p }     // owns it; may return it
+
+// --- concurrency ---
+let ch: Channel<int> = channel(2)
+nursery {
+    spawn worker(ch)                             // tasks can't outlive the block
+}
+// send(ch, v)  recv(ch)/try_recv(ch) -> Option<T>  close(ch)   // send on a closed channel traps
+
+// --- talking to C (FFI) ---  (extern block = the trust boundary; no separate 'unsafe')
+extern "c" {
+    fn strlen(s: string) -> i64                     // string -> const char*
+    fn fread(mut buf: [u8], n: i64, f: Ptr) -> i64  // [u8]/mut [u8] = buffer; Ptr = opaque handle
+}
+
+// --- modules / stdlib ---
+import "std/string" as str        // str.trim, to_upper, contains, replace, join, ...
+import "std/list" as list         // list.map, filter, reduce, sort
+import "std/map" as mp            // mp.Map<K, V> (any Hash+Eq key, incl. structs): set, get -> Option<V>, has, size, keys -> [K]
+// names beginning with _ are private to their module
+
+// --- contracts + verification ---
+fn clamp(x: int, lo: int, hi: int) -> int
+    requires lo <= hi
+    ensures result >= lo
+    ensures result <= hi
+{ if x < lo { return lo }  if x > hi { return hi }  return x }
+assert(cond, "message")           // inline check; elided in --release
+
+// emberc --emit=run | check | prove | replay | trace(--tape) | docs | c   [--release]
+// emberc -o <bin> file.em     // compile to a standalone native binary (Chapter 22)
+```
+
+---
+
+# Part VI — Things People See
+
+The chapters so far built the language up piece by piece: values, functions, structs and enums,
+generics, ownership, concurrency, contracts. This last part spends all of it at once. Flare —
+Ember's UI layer — is where structs become components, enums become the thing you `match` to paint
+a screen, closures hang off buttons, and the render loop from
+[Chapter 13](#chapter-13--memory-the-quiet-way) grows into an application. It's the book's capstone,
+and there's no new syntax in it — only the old syntax pointed at a window.
+
+## Chapter 25 — Flare: Interfaces You Can Read
+
+Flare is Ember's component-style UI layer. Components are functions, props are arguments, state is
+local, and the screen is a declarative description you re-evaluate each frame. There's no retained
+widget tree, no diffing layer, no separate effect system — and the reason there isn't is the whole
+design, so it's worth a minute.
+
+### Immediate mode, not a retained tree
+
+Ember's graphics backend **redraws the whole frame every tick, cheaply**. That's the immediate-mode
+model from [Chapter 13](#chapter-13--memory-the-quiet-way): the UI is a pure function of your state,
+drawn fresh each frame, with no retained widget tree to keep in sync. There's nothing to diff and
+nothing to reconcile, because nothing is kept between frames to fall out of date. Components, props,
+local state, and declarative composition drop straight into Ember's `loop { …describe the frame… }`.
+No retained tree means no graph-shaped mutable state, which means the ownership model from
+[Chapter 12](#chapter-12--ownership-without-tears) stays clean even while you build something live
+and interactive.
+
+### The shape of a Flare program
+
+Here's a whole one — a window with a toolbar and a counter. It's `examples/17_flare.em`, shipped with
+the compiler:
+
+```ember
+import "std/draw" as draw
+import "std/flare" as flare
+
+fn main() -> int {
+    draw.window(580, 400, "Flare")
+    var f = flare.new()
+    var count = 0
+    var dark = false
+
+    loop {
+        if draw.closing() { break }
+        draw.begin(f.bg())            // clear to the theme's background
+        f.begin()                     // start this frame's UI
+
+        // A toolbar: title on the left, actions pushed right by a flexible spacer.
+        f.row(flare.BETWEEN, flare.CENTER)
+        f.heading("Flare")
+        f.spacer()
+        if f.button("Theme") {
+            dark = !dark
+            if dark { f.use_dark() } else { f.use_light() }
+        }
+        if f.primary("Compose") { count = count + 1 }
+        f.end()
+
+        f.text_muted("Composed {count} times.")
+
+        f.finish()                    // solve the layout, paint the frame
+        draw.finish()
+    }
+
+    draw.close()
+    return 0
+}
+```
+
+Build the graphics compiler and run it:
+
+```
+make graphics && EMBER_STD=./std build/emberc-gfx --emit=run examples/17_flare.em
+```
+
+Four things in that loop are the entire model. The next four sections take them one at a time.
+
+### Events are return values
+
+Look again at the buttons:
+
+```ember
+if f.button("Theme")   { ... }
+if f.primary("Compose") { count = count + 1 }
+```
+
+There's no separate click handler. `f.button("Theme")` *draws* the button and *returns a `bool`* —
+`true` on the one frame the user clicked it. So a click is just an `if`, and the code that reacts to a button sits
+right next to the button, in the same place, read top to bottom. That's the idea that makes
+immediate-mode UI legible: no callbacks to register, no handler defined three hundred lines away, no
+`this` to bind.
+
+### The loop owns your state
+
+Where does state live? In the `var`s the loop owns. `count` is just a `var`; it survives because the
+loop survives. No setter, no stale-closure surprise. You only reach for Flare's own state
+when you want a value **encapsulated inside a reusable component**, so the caller needn't hold it for
+you — and that's the next section.
+
+### Components are just functions
+
+A component is a function that takes the `Flare` value (by mutable borrow — see
+[Chapter 12](#chapter-12--ownership-without-tears)) and emits some widgets. Here's a self-contained
+counter that keeps its own count:
+
+```ember
+fn Counter(mut f: flare.Flare, key: string, title: string) {
+    f.key(key)                          // give this instance its own identity
+    var n = f.state_int("n", 0)         // read encapsulated state (default 0)
+    f.row(flare.START, flare.CENTER)
+    if f.button("-") { n = n - 1 }
+    f.label("{title}: {n}")
+    if f.button("+") { n = n + 1 }
+    f.end()
+    f.set_int("n", n)                   // write it back
+    f.key_clear()
+}
+```
+
+Now drop two of them in, and they don't interfere:
+
+```ember
+Counter(f, "apples", "Apples")
+Counter(f, "pears",  "Pears")
+```
+
+Both draw a `"-"` and a `"+"` with identical labels, and both keep their own separate count. The
+thing that keeps them apart is `key`.
+
+### Identity: the one concept that makes lists work
+
+Immediate-mode widgets are identified by a hash of their label, so two `"+"` buttons would collide —
+same id, same state slot, same hit-test. `f.key("apples")` opens an **id scope** that is mixed into
+every widget id *and* every piece of state beneath it, so the two counters' buttons and their
+`state_int("n", …)` stay distinct. This is the classic immediate-mode id-stack. Open a scope with
+`f.key(...)` before a keyed component or a list row; close it with `f.key_clear()` after. For a
+list, the idiom is just what you'd guess:
+
+```ember
+var i = 0
+loop {
+    if i == rows.len() { break }
+    f.key("row{i}")                     // each row gets a distinct identity
+    if f.button(rows[i]) { selected = i }
+    f.key_clear()
+    i = i + 1
+}
+```
+
+### Layout is real flexbox
+
+The toolbar used `f.row(flare.BETWEEN, flare.CENTER)` and `f.spacer()`, and that's no metaphor:
+underneath Flare sits `std/layout`, an actual flexbox solver. Each frame, as you declare the UI,
+Flare builds an ephemeral tree of boxes, solves it (measure, then place), and paints each widget at
+its solved rectangle. Nothing is retained between frames, so the immediate-mode bet still holds; the
+value-returning buttons keep working because a click this frame tests against the rectangle the widget
+got *last* frame — stable enough that you never notice.
+
+Containers come in opener/`f.end()` pairs:
+
+- `f.row(justify, align)` / `f.column(justify, align)` — lay children along the main axis (a row is
+  horizontal), sized to their content. `justify` positions them along the main axis (`flare.START`,
+  `flare.CENTER`, `flare.END`, `flare.BETWEEN`); `align` positions them on the cross axis
+  (`flare.START`, `flare.CENTER`, `flare.END`, `flare.STRETCH`).
+- `f.row_grow(...)` / `f.column_grow(...)` — the same, but flex to **fill** the parent's main axis.
+- `f.spacer()` — a flexible gap that swallows the leftover space, pushing whatever follows to the far
+  edge (that's how the toolbar's actions reached the right).
+- `f.strut(w, h)` — a fixed minimum size, e.g. to pin a sidebar to a width.
+- `f.panel_begin(justify, align)` — a container with a painted surface, for a sidebar or a card.
+- `f.scroll_begin(key)` / `f.scroll_end(key)` — a clipped, wheel-scrolled viewport;
+  `f.scroll_to_bottom(key)` jumps it to the end.
+
+A two-pane application skeleton — a pinned sidebar beside a growing, scrollable main pane — falls
+right out of those:
+
+```ember
+f.row_grow(flare.START, flare.STRETCH)        // the body fills the window
+
+f.panel_begin(flare.START, flare.START)       // a painted sidebar…
+f.strut(220, 0)                               // …pinned to 220px wide
+f.heading("Notes")
+if f.primary("+ New note") { make_note() }
+f.text_muted("Recent")
+f.end()
+
+f.column_grow(flare.START, flare.STRETCH)     // the main pane takes the rest
+f.scroll_begin("body")
+f.paragraph(current, 600)                     // wrapped prose, 600px wide
+f.scroll_end("body")
+f.end()
+
+f.end()                                        // close the body row
+```
+
+### Animation: springs and FLIP
+
+Motion rides the **same keyed state** as everything else, and it steps on a **fixed timestep**, so an
+animation is a pure function of the frame count — deterministic, replayable, golden-testable, never
+tied to the wall clock. There are three pieces, and `examples/graphics/18_flare_anim.em` runs all of
+them.
+
+**A spring** eases a named value toward a target, one fixed step per frame. `f.spring("panel_w",
+target)` returns the value's current position; point it at a new target on any frame and it redirects
+smoothly with its velocity intact — which is just what an interactive UI needs, since the user keeps
+poking at things mid-motion. Drive a width, a scale, an offset:
+
+```ember
+var tw = 160.0
+if expanded { tw = 460.0 }
+let w = f.spring("panel_w", tw)        // eases between the widths; retargets mid-flight
+f.panel_begin(flare.START, flare.CENTER)
+f.strut(to_int(w), 56)
+f.label("width springs to {to_int(w)}px")
+f.end()
+```
+
+(`f.spring_with(key, target, stiffness, damping)` tunes the feel if the default bounce isn't right.)
+
+**`f.at(dx, dy) { … } f.end_at()`** shifts the *paint* of everything inside it by a pixel offset
+without moving it in the layout solve, so a subtree slides *over* its neighbours — feed it a spring
+and you have a drawer or a toast.
+
+**`f.animate_layout(key) { … } f.end_animate_layout()`** animates a widget that moved because the
+*layout* changed — a row was inserted, a list reordered. This is the well-known FLIP trick, and Flare
+gets it almost for free: it already re-solves real flexbox every frame and caches each widget's
+last-frame rectangle, so last frame's position is the "before" and this frame's is the "after," and
+the spring just rides the difference, at paint time. Give each item a **stable key** so the motion
+follows the item, not the slot it happens to occupy:
+
+```ember
+var i = 0
+loop {
+    if i == items.len() { break }
+    f.animate_layout("row:{items[i]}")     // stable key → the animation follows this row
+    f.panel_begin(flare.START, flare.CENTER)
+    f.label("Row #{items[i]}")
+    f.end()
+    f.end_animate_layout()
+    i = i + 1
+}
+```
+
+Add or remove a row at the top and the rows below *slide* to their new places instead of jumping. The
+determinism is the quietly useful part: because motion is a function of frame count, the animation
+goldens (`tests/graphics/flare_spring.em`, `flare_flip.em`) reproduce frame-for-frame.
+
+### The widget catalogue
+
+Everything you emit between `f.begin()` and `f.finish()`:
+
+- **Actions** — `f.button(txt) -> bool` (a secondary button), `f.primary(txt) -> bool` (the one
+  headline action, in the accent colour), and `f.ghost_button(txt) -> bool` (borderless, no fill at
+  rest — for toolbars and a message's Copy/Retry). All return `true` on the frame they're clicked.
+- **Choice** — `f.segmented(key, options, selected) -> int` is a single-choice strip (the chosen
+  option filled with the accent, the rest plain) that returns the new index, so it reads
+  `mode = f.segmented("mode", opts, mode)` — the natural fit for a small settings toggle.
+- **Navigation** — `f.nav_item(txt, active) -> bool` is a full-width sidebar row that grows to the
+  panel's width and takes the accent fill when `active`; pair it in a `row` with a trailing
+  `f.ghost_button("···")` for per-item actions. `f.avatar(glyph)` is a small rounded identity badge.
+- **Text** — `f.heading(s)`, `f.label(s)`, `f.text_muted(s)` for a quieter line, and `f.divider()`
+  for a full-width hairline rule.
+- **Prose** — `f.paragraph(text, width)` word-wraps plain text to a pixel width. `f.rich_text(text,
+  width)` wraps prose with **inline** Markdown emphasis — `**bold**`, `*italic*`, `` `code` ``, and
+  `[links](url)`. `f.markdown(text, width)` goes the whole way: it parses the text with
+  `std/markdown` into the `Block` enum and renders each block with a `match` — prose and bullets,
+  size-stepped headings, blockquotes with an accent bar, pipe **tables** as an aligned grid, and
+  fenced code blocks in a monospace panel syntax-highlighted by `std/highlight` (whose text you can
+  select and copy). The renderer is one exhaustive `match` over an enum, which is
+  [Chapter 8](#chapter-8--enums-and-pattern-matching) doing exactly what it's for.
+- **Input** — `f.text_field(key, value) -> string` is a full single-line editor (caret, selection,
+  horizontal scroll, clipboard, UTF-8-correct cursor motion) that returns the current text;
+  `f.submit() -> bool` reports `true` on the frame Enter was pressed, and clears the field.
+  `f.text_area(key, value) -> string` is its multi-line sibling — it auto-grows then scrolls, has a
+  2-D caret, and takes **Shift+Enter** for a newline while plain Enter still reports through
+  `submit()` (the composer convention). The loop owns the string:
+
+```ember
+input = f.text_field("composer", input)
+if f.submit() {
+    if input.len() > 0 { rows.append(input) }
+    input = ""
+}
+```
+
+A handful of containers earn their place once an app grows up: `f.bubble_begin()` / `f.bubble_end()`
+wrap a rounded, tinted message bubble; `f.page_begin(width)` / `f.page_end()` centre a fixed-width
+readable column with flexible margins either side (CSS `max-width` + `margin: auto`, in other words);
+`f.scroll_begin_sticky(key)` is a transcript viewport that follows the bottom as content grows *but
+only while you're already there*, so scrolling up to re-read leaves you put — paired with
+`f.scroll_fab(key) -> bool`, the round "jump to latest" button that appears once you've scrolled away;
+and `f.splitter(key, size, lo, hi, vertical) -> int` is a draggable handle *between* two panes that
+returns the pane's new size for you to store and feed back next frame.
+
+### Overlays: modals and popovers
+
+Two floating layers sit above the main UI, and both rest on `std/layout`'s floating node, so they land
+correctly however deep in the tree you declare them.
+
+`f.modal_begin(key, w, h) -> bool` / `f.modal_end()` open a **centred dialog** over a dimmed scrim
+(pass `h = 0` to size to content). While it's open the widgets behind it go inert — clicks can't fall
+through — and a press on the scrim *outside* the panel returns `false`, the caller's cue to close it.
+Build the contents as a column between the two calls; it's the reusable basis for a settings dialog, a
+confirmation, a picker:
+
+```ember
+if settings_open {
+    if !f.modal_begin("settings", 420, 0) {   // false → pressed outside; close it
+        settings_open = false
+    }
+    f.heading("Settings")
+    theme = f.segmented("theme", ["Light", "Dark"], theme)
+    if f.primary("Done") { settings_open = false }
+    f.modal_end()
+}
+```
+
+`f.popover_begin(key, x, y) -> bool` / `f.popover_end()` open an **anchored** menu at a point — no
+scrim — with the same press-outside-to-close behaviour, filled with `f.menu_item(txt) -> bool` rows.
+The cursor position is the usual anchor, which makes it the natural context menu or dropdown.
+
+### Theme, zoom, and what it all rests on
+
+`f.use_dark()` and `f.use_light()` re-theme the entire app — the default is a warm "parchment and
+clay" look — and `f.bg()` hands you the current background colour to pass to `draw.begin`.
+`f.set_zoom(pct)` sets the app-wide text size (clamped 60–220 — pick a sensible default at startup,
+e.g. `f.set_zoom(80)`) and `f.zoom_by(delta)` nudges it for accessibility. None of this is
+special-cased: Flare delegates
+everything to `std/ui`, so the theme, the per-frame UI tape (a record of input and draw commands, in
+the spirit of the execution tape from
+[Chapter 19](#chapter-19--the-tape-and-errors-as-data)), and contracts all carry over unchanged.
+Flare is a few hundred lines of Ember over `std/ui` and `std/layout` — you could have written it.
+
+### What's not there yet
+
+True to the book's deal ([Chapter 23](#chapter-23--the-not-yet-list)), here are the edges:
+
+- **`checkbox` and `slider`** exist in `std/ui` but aren't wrapped into the Flare flexbox model yet —
+  for now a `button` or a `segmented` bound to a `var` does the job.
+- **Inline Markdown emphasis renders, but with *faux* faces.** `rich_text` and `markdown` now draw
+  `**bold**` and `*italic*` — but only one weight of the UI font is embedded, so bold and italic are
+  *synthesised* (thickened and slanted) rather than drawn from real face files. It reads fine; it
+  isn't yet typographically honest (OFI-077, open).
+- **Selection in `markdown` is per-block.** You can drag-select and copy within a single code or prose
+  block, but not yet *across* blocks.
+
+> **Fireside trivia.** The vocabulary Flare settled on — `row`, `column`, `spacer`, `grow`,
+> `justify`, `align` — isn't an accident. It's flexbox, the layout model every front-end developer
+> (and every model trained on their code) knows cold. Pair it with events-as-return-values, where the
+> handler sits physically next to the widget, and you get a UI dialect with almost no hidden control
+> flow: no callback indirection, no effect scheduling, no retained tree mutating behind your back. The
+> whole stack, layout solver included, is itself a handful of readable Ember files.
+
+---
+
+## Appendix A — Glossary
+
+**Binding** — a name attached to a value, via `let` (immutable) or `var` (mutable).
+
+**Borrow** — using a value without taking ownership of it; the default for parameters.
+
+**Closure** — a function value that has captured variables from where it was created (by value,
+in Ember).
+
+**Contract** — a `requires`/`ensures` specification attached to a function; checked in debug,
+elided in release.
+
+**Dynamic dispatch** — calling a method through an interface *value*, where the concrete type
+isn't known until runtime and the right method is found via the value's method table (vtable).
+Contrast with a generic *bound*, which dispatches statically through a witness.
+
+**Enum** — a sum type: a value that is exactly one of several named variants, each possibly
+carrying typed fields.
+
+**Exhaustive** — a `match` that handles every variant; required, and checked by the compiler.
+
+**Generic** — code parameterised by type (`Box<T>`), written once and used for many types.
+
+**Interface** — a named set of method signatures a type can declare it `implements`.
+
+**Move** — transferring ownership of a value; the old name can't be used afterward.
+
+**Nursery** — a scoped block that owns concurrent tasks and joins them all before it exits.
+
+**Object-safe** — an interface whose methods only ever mention `Self` as the receiver (never as a
+parameter or return type), which is the condition for using it as a value type for dynamic
+dispatch. Non-object-safe interfaces are still usable as generic bounds.
+
+**Option** — `Some(value)` or `None`; Ember's "maybe a value," replacing `null`.
+
+**Prelude** — the handful of types (`Option`, `Result`) injected into every program
+automatically.
+
+**Result** — `Ok(value)` or `Err(error)`; a success-or-reasoned-failure value.
+
+**Tape** — the structured, per-instruction JSON record of an execution.
+
+**Unit function** — a function with no return type; it runs for effect and yields no value.
+
+---
+
+## Colophon
+
+This book describes the Ember language as it stood in **mid-June 2026**, early in its life and
+moving fast. This edition was refreshed as several features landed in quick succession —
+**dynamic dispatch** (interfaces as value types), the **bitwise and shift operators** plus the
+explicit **wrapping-arithmetic** builtins, the **generic-keyed `Map<K, V>`** and the bounded
+generic structs underneath it, the **pointer/buffer/handle FFI**, and — largest of all — the
+**native C backend** that compiles a whole program to a standalone binary
+([Chapter 22](#chapter-22--compiling-to-native)) — each of which had been
+"not yet" only a day or two earlier. It
+covers only what had been built and tested by the time of writing; the
+[Not Yet List](#chapter-23--the-not-yet-list) marks the boundary. A later pass — this one — folded
+in what had landed since: **array slices** and explicit **`.clone()`**, the non-blocking
+**`try_recv`**, **struct keys** for `Map`/`Set`, a returned C **`char*` arriving as a copied-in
+`string`** (how `std/http` brings a response body home), and — the largest piece — **Flare's
+animation** (springs + FLIP), its **modal/popover overlays**, and a much wider **widget catalogue**.
+
+Every Ember snippet in these pages was compiled and run with the reference compiler before being
+written down, and the outputs shown are the outputs produced. Where this book and the language's
+formal specification disagreed, the book follows **what the compiler actually does** — and
+refreshing it turned up a few places where the spec's prose had drifted behind its own
+implementation (a sentence still calling structs "immutable records," another claiming there was
+no prelude, a stale note on which generic bounds were allowed — and, this pass, a `Map` key still
+said to need `Copy` and Flare's inline Markdown still described as unrendered). Those were noted and filed as
+Opportunities For Improvement rather than copied, which is exactly the bargain this book makes
+with itself.
+
+Ember will have grown since you read this. Treat the *spirit* — safe by default, simple by
+default, fast to build, honest about its edges — as the durable part, and check the current
+spec and examples for the details. The fire's only just been lit.
+
+*Written by the fireside. Mind the sparks.*

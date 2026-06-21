@@ -1,0 +1,54 @@
+== fn unwrap_or (arity 2) ==
+0000    8  GET_LOCAL 0
+0002    |  GET_LOCAL 2
+0004    |  GET_TAG 
+0005    |  CONST    0  (= 0)
+0007    |  EQ      
+0008    |  JUMP_IF_FALSE 14 (-> 0025)
+0011    |  POP     
+0012    |  GET_LOCAL 2
+0014    |  GET_FIELD 0
+0016    9  GET_LOCAL 3
+0018    |  DROP     0
+0020    |  RETURN  
+0021    |  POP     
+0022    |  JUMP     20 (-> 0045)
+0025    |  POP     
+0026    |  GET_LOCAL 2
+0028    |  GET_TAG 
+0029    |  CONST    1  (= 1)
+0031    |  EQ      
+0032    |  JUMP_IF_FALSE 9 (-> 0044)
+0035    |  POP     
+0036   10  GET_LOCAL 1
+0038    |  DROP     0
+0040    |  RETURN  
+0041    |  JUMP     1 (-> 0045)
+0044    |  POP     
+0045    |  POP     
+0046   12  GET_LOCAL 1
+0048    |  DROP     0
+0050    |  RETURN  
+0051    |  CONST    2  (= 0)
+0053    |  DROP     0
+0055    |  RETURN  
+== fn main (arity 0) ==
+0000   15  CONST    0  (= 5)
+0002    |  NEW_ENUM 0 0 1
+0006   16  NEW_ENUM 0 1 0
+0010   17  GET_LOCAL 0
+0012    |  INCREF  
+0013    |  CONST    1  (= 0)
+0015    |  CALL     0 2
+0018    |  GET_LOCAL 1
+0020    |  INCREF  
+0021    |  CONST    2  (= 100)
+0023    |  CALL     0 2
+0026    |  ADD      0
+0028    |  DROP     0
+0030    |  DROP     1
+0032    |  RETURN  
+0033    |  CONST    3  (= 0)
+0035    |  DROP     0
+0037    |  DROP     1
+0039    |  RETURN  

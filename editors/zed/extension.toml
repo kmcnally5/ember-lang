@@ -1,0 +1,24 @@
+id = "ember"
+name = "Ember"
+version = "0.1.0"
+schema_version = 1
+authors = ["Ember"]
+description = "Ember language support for Zed: syntax highlighting plus diagnostics, hover, go-to-definition, completion, and document symbols via the in-tree emberc language server."
+
+# The tree-sitter grammar (syntax highlighting + outline). Zed builds it from a git repository at a
+# pinned revision, so the grammar is a self-contained local git repo. For development this points at
+# the in-tree copy via a file:// URL; to publish the extension, push tree-sitter-ember to a hosted
+# git remote and swap `repository` for that URL. REGEN NOTE: after editing grammar.js, re-run
+# `npx tree-sitter-cli generate`, commit the grammar repo, and update `rev` to the new commit SHA.
+[grammars.ember]
+repository = "file:///Users/karlmcnally/Documents/Development/ember/editors/zed/tree-sitter-ember"
+rev = "8f1a500b6a18cd17dcc4a5cd42653a93c0ff3cd5"
+
+# The language server: launched by src/lib.rs (language_server_command). The id here ("ember") is the
+# LanguageServerId the Rust code receives; `languages` matches languages/ember/config.toml's `name`.
+[language_servers.ember]
+name = "Ember Language Server"
+languages = ["Ember"]
+
+[language_servers.ember.language_ids]
+"Ember" = "ember"

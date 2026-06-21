@@ -1,0 +1,4 @@
+# Crucible baseline — signatures of KNOWN, tracked findings. A run fails (exit 1) only on a NEW
+# signature. Remove a line when its OFI is fixed AND a clean Crucible run confirms it.
+#
+# (empty — OFI-062 and OFI-063 are fully fixed on BOTH backends as of 2026-06-18; Crucible is green.)

@@ -1,0 +1,1 @@
+tests/run/error_borrow_conflict.em:10:12: error: the same value is passed to a 'mut'/'move' parameter and aliased by another argument

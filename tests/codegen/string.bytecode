@@ -1,0 +1,9 @@
+== fn main (arity 0) ==
+0000    3  STRING   0  (= "Hello, ")
+0002    |  STRING   1  (= "Ember")
+0004    |  ADD      0
+0006    |  STRING   2  (= "!")
+0008    |  ADD      0
+0010    |  RETURN  
+0011    |  CONST    0  (= 0)
+0013    |  RETURN  

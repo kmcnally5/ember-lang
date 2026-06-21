@@ -1,0 +1,1 @@
+tests/run/error_dup_case.em:7:14: error: duplicate case for a variant

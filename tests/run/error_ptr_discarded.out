@@ -1,0 +1,2 @@
+tests/run/error_ptr_discarded.em:9:5: error: this 'Ptr' handle is opened but immediately discarded — it leaks
+tests/run/error_ptr_discarded.em:9:5: help: bind it to a local and close it (e.g. `let f = …` then `fclose(f)`), or pass it by `move` to a call that takes ownership

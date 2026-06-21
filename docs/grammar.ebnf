@@ -1,0 +1,148 @@
+(* ===========================================================================
+   Ember grammar (EBNF)
+   ---------------------------------------------------------------------------
+   This is the SPEC of Ember's surface syntax. The hand-written recursive-descent
+   parser in src/parser.c is the implementation of record; this grammar is the
+   specification it implements. Keep the two in sync: any change to one updates
+   the other in the same commit. The parser AST golden tests (tests/parser/) are
+   the behavioural anchor.
+
+   Notation: "..." literal terminals; { x } zero-or-more; [ x ] optional;
+   ( ) grouping; | alternation; (* comment *).
+
+   Three things EBNF cannot express are handled by the parser and noted inline:
+     (N) Newline termination — Ember has no semicolons. The lexer emits an
+         implicit terminator at a line break only after a token that CAN end a
+         statement: a literal, an identifier, "self", a closing ")" "]" "}", the
+         postfix "?", or "return"/"break"/"continue". A line break after any OTHER
+         token (an operator, ".", "=", an opening bracket, …) does NOT terminate —
+         the expression continues onto the next line. So a method chain is continued
+         by a TRAILING operator: `foo.<newline>bar()` chains, but a LEADING "." —
+         `foo<newline>.bar()` — does NOT (the first line already terminated). Inside
+         "(" or "[" brackets terminators are suppressed entirely; "{" is not counted
+         (it delimits a block). Statements/members are separated by these terminators,
+         which the parser skips between items; they are omitted from the rules below
+         for readability.
+     (S) Struct-literal suppression — inside the header expression of if / for /
+         match, StructLit is disabled so a trailing "{" reads as a block.
+     (G) Generic-literal disambiguation — "Name<...> {" is read as a generic
+         StructLit iff a balanced "<...>" is immediately followed by "{" AND every
+         token inside the brackets is type-legal (the tokens parse_type can consume:
+         ident, ".", ",", "[" "]", "fn" "(" ")" "->", and nested "<" ">"). Otherwise
+         "<" is a comparison. This is a SOUND rule, not a heuristic: no expression
+         begins with "{" (see Primary — there is no "{" alternative), so "> {" can
+         never continue a comparison; and a non-type token inside the brackets proves
+         the "<" is less-than. LOAD-BEARING INVARIANT: this rests on "no expression
+         begins with '{'". Adding any brace-initial expression (map/record literal,
+         block-expression) reopens the ambiguity — and OFI-002. (OFI-002, CLOSED.)
+   =========================================================================== *)
+
+
+(* ----- terminals ----- *)
+ident   = letter , { letter | digit | "_" } ;       (* also leading "_" *)
+int     = digit , { digit } ;
+float   = digit , { digit } , "." , digit , { digit } ;
+string  = '"' , { character } , '"' ;               (* may contain {interpolation} *)
+
+
+(* ----- top level ----- *)
+Program       = { Decl } ;                                  (* (N) *)
+Decl          = FnDecl | StructDecl | EnumDecl
+              | InterfaceDecl | ImportDecl | GlobalBinding ;
+
+Generics      = [ "<" , GenericParam , { "," , GenericParam } , ">" ] ;
+GenericParam  = ident , [ ":" , ident , { "+" , ident } ] ; (* T | T: Bound | T: Hash + Eq + Copy *)
+                (* Each bound is an interface name; "Copy" is the contextual copyable marker. *)
+
+FnDecl        = "fn" , ident , Generics ,
+                "(" , [ ParamList ] , ")" , [ "->" , Type ] , Block ;
+ParamList     = Param , { "," , Param } ;
+(* The ownership qualifier precedes the binding (it describes the parameter,
+   not the type) and applies uniformly to `self` and named parameters. *)
+Param         = [ "mut" | "move" ] , ( "self" | ident , ":" , Type ) ;
+
+Implements    = "implements" , ident , { "," , ident } ;   (* nominal conformance *)
+
+StructDecl    = "struct" , ident , Generics , [ Implements ] ,
+                "{" , { Field | FnDecl } , "}" ;             (* (N) *)
+Field         = ident , ":" , Type ;
+
+EnumDecl      = "enum" , ident , Generics , [ Implements ] ,
+                "{" , { Variant } , "}" ;                    (* (N) *)
+Variant       = ident , [ "(" , Field , { "," , Field } , ")" ] ;
+
+InterfaceDecl = "interface" , ident , Generics , "{" , { FnSig } , "}" ; (* (N) *)
+FnSig         = "fn" , ident , Generics ,
+                "(" , [ ParamList ] , ")" , [ "->" , Type ] ;  (* no body *)
+
+ImportDecl    = "import" , string , "as" , ident ;
+GlobalBinding = ( "let" | "var" ) , ident , [ ":" , Type ] , "=" , Expr ;
+
+
+(* ----- types ----- *)
+(* Types carry no ownership qualifier; `mut`/`move` live on the parameter (see
+   Param). A named type may be a numeric alias (int, float) or width-explicit
+   (i32, u64, f64, …) — both are just idents to the grammar. *)
+Type          = "[" , Type , "]"
+              | ident , [ "<" , Type , { "," , Type } , ">" ] ;
+
+
+(* ----- statements ----- *)
+Block         = "{" , { Stmt } , "}" ;                       (* (N) *)
+Stmt          = Binding | ReturnStmt | IfStmt | ForStmt | LoopStmt
+              | "break" | "continue" | MatchStmt | SpawnStmt
+              | NurseryStmt | Block | AssignOrExpr ;
+
+Binding       = ( "let" | "var" ) , ident , [ ":" , Type ] , "=" , Expr ;
+ReturnStmt    = "return" , [ Expr ] ;
+IfStmt        = "if" , Expr , Block , [ "else" , ( IfStmt | Block ) ] ;  (* (S) *)
+ForStmt       = "for" , ident , "in" , Expr , Block ;                    (* (S) *)
+LoopStmt      = "loop" , Block ;
+MatchStmt     = "match" , Expr , "{" , { "case" , Pattern , Block } , "}" ; (* (S)(N) *)
+                (* The checker requires the cases to be EXHAUSTIVE: every variant of the
+                   scrutinee's enum is handled, or a wildcard `case _` covers the rest. *)
+SpawnStmt     = "spawn" , Expr ;
+NurseryStmt   = "nursery" , Block ;
+
+(* An assignment's target must be an lvalue (ident / field / index); this is
+   enforced by the checker, not the grammar. *)
+AssignOrExpr  = Expr , [ "=" , Expr ] ;
+
+Pattern       = ident , [ "." , ident ] ,                    (* a bare "_" ident is the wildcard *)
+                [ "(" , [ ident , { "," , ident } ] , ")" ] ;
+
+
+(* ----- expressions (lowest to highest precedence; all left-associative) ----- *)
+Expr          = LogicOr ;
+LogicOr       = LogicAnd , { "||" , LogicAnd } ;
+LogicAnd      = BitOr , { "&&" , BitOr } ;
+BitOr         = BitXor , { "|" , BitXor } ;        (* "|" bitwise-or; lambda "|" is in Primary *)
+BitXor        = BitAnd , { "^" , BitAnd } ;
+BitAnd        = Equality , { "&" , Equality } ;
+Equality      = Comparison , { ( "==" | "!=" ) , Comparison } ;
+Comparison    = Shift , { ( "<" | "<=" | ">" | ">=" ) , Shift } ;
+Shift         = Term , { ( "<<" | ">>" ) , Term } ;
+Term          = Factor , { ( "+" | "-" ) , Factor } ;
+Factor        = Unary , { ( "*" | "/" | "%" ) , Unary } ;
+Unary         = ( "!" | "-" | "~" ) , Unary | Postfix ;
+Postfix       = Primary ,
+                { "." , ident | "(" , [ ArgList ] , ")" | "[" , Expr , "]" | "?" } ;
+                (* "?" is error propagation: it unwraps a Result<T,E> or Option<T>,
+                   yielding the Ok/Some payload, or returns the enclosing function
+                   early with the Err/None. *)
+ArgList       = Expr , { "," , Expr } ;
+
+Primary       = int | float | string | "true" | "false" | "self"
+              | Lambda                                       (* closures — the BitOr "|" comment *)
+              | StructLit                                    (* (S)(G) *)
+              | ident
+              | "(" , Expr , ")"
+              | "[" , [ Expr , { "," , Expr } ] , "]" ;
+
+(* A closure: parameters between pipes (their types optional, inferred from the
+   expected function type), then either a block or a single expression body. *)
+Lambda        = "|" , [ LambdaParam , { "," , LambdaParam } ] , "|" , ( Block | Expr ) ;
+LambdaParam   = ident , [ ":" , Type ] ;
+
+StructLit     = ident , [ "<" , Type , { "," , Type } , ">" ] ,   (* (G) *)
+                "{" , { ident , ":" , Expr , [ "," ] } , "}" ;

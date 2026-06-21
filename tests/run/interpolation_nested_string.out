@@ -1,0 +1,4 @@
+split count = 3
+concat = xyz
+brace in string len = 3
+=> 0

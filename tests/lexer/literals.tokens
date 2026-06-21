@@ -1,0 +1,57 @@
+   7:1    LET         let
+   7:5    IDENT       i
+   7:14   ASSIGN      =
+   7:16   INT         0
+   8:1    NEWLINE     
+   8:1    LET         let
+   8:5    IDENT       big
+   8:14   ASSIGN      =
+   8:16   INT         1000000
+   9:1    NEWLINE     
+   9:1    LET         let
+   9:5    IDENT       f
+   9:14   ASSIGN      =
+   9:16   FLOAT       3.14159
+  10:1    NEWLINE     
+  10:1    LET         let
+  10:5    IDENT       zero
+  10:14   ASSIGN      =
+  10:16   FLOAT       0.0
+  11:1    NEWLINE     
+  11:1    LET         let
+  11:5    IDENT       member
+  11:14   ASSIGN      =
+  11:16   IDENT       obj
+  11:19   DOT         .
+  11:20   IDENT       field
+  12:1    NEWLINE     
+  12:1    LET         let
+  12:5    IDENT       chained
+  12:14   ASSIGN      =
+  12:16   IDENT       a
+  12:17   DOT         .
+  12:18   IDENT       b
+  12:19   DOT         .
+  12:20   IDENT       c
+  13:1    NEWLINE     
+  13:1    LET         let
+  13:5    IDENT       plain
+  13:14   ASSIGN      =
+  13:16   STRING      "plain string"
+  14:1    NEWLINE     
+  14:1    LET         let
+  14:5    IDENT       escaped
+  14:14   ASSIGN      =
+  14:16   STRING      "tab\tnewline\nquote\" slash\\"
+  15:1    NEWLINE     
+  15:1    LET         let
+  15:5    IDENT       interp
+  15:14   ASSIGN      =
+  15:16   STRING      "x = {x}, y = {y}"
+  16:1    NEWLINE     
+  16:1    LET         let
+  16:5    IDENT       empty
+  16:14   ASSIGN      =
+  16:16   STRING      ""
+  17:1    NEWLINE     
+  17:1    EOF         

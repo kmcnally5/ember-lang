@@ -1,0 +1,1 @@
+tests/run/error_assign_to_let.em:6:9: error: cannot assign to an immutable 'let' binding; declare it with 'var'

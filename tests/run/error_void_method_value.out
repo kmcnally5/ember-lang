@@ -1,0 +1,1 @@
+tests/run/error_void_method_value.em:14:9: error: assigned value's type does not match the variable

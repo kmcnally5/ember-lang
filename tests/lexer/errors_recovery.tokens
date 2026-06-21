@@ -1,0 +1,24 @@
+tests/lexer/errors_recovery.em:11:11: error: unexpected character (near '$')
+tests/lexer/errors_recovery.em:12:11: error: unexpected character (near '@')
+tests/lexer/errors_recovery.em:13:9: error: unterminated string literal
+tests/lexer/errors_recovery.em:13:9: help: add a closing '"'
+  11:1    LET         let
+  11:5    IDENT       a
+  11:7    ASSIGN      =
+  11:9    INT         1
+  11:11   ERROR       $
+  11:13   INT         2
+  12:1    NEWLINE     
+  12:1    LET         let
+  12:5    IDENT       b
+  12:7    ASSIGN      =
+  12:9    INT         3
+  12:11   ERROR       @
+  12:13   INT         4
+  13:1    NEWLINE     
+  13:1    LET         let
+  13:5    IDENT       s
+  13:7    ASSIGN      =
+  13:9    ERROR       "unterminated string
+
+  14:1    EOF         

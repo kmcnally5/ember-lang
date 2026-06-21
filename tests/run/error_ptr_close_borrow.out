@@ -1,0 +1,1 @@
+tests/run/error_ptr_close_borrow.em:9:12: error: cannot close or transfer a borrowed 'Ptr'; take it by 'move' to gain ownership (declare the parameter 'move f: Ptr', not 'f' or 'mut f')

@@ -1,0 +1,3 @@
+tests/run/error_generic_use_after_move.em:10:13: error: use of 't' after it was moved
+tests/run/error_generic_use_after_move.em:10:13: help: a move transfers ownership; pass it without `move` to borrow it instead, or make a copy before the move
+tests/run/error_generic_use_after_move.em:9:13: note: value moved here

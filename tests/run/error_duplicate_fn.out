@@ -1,0 +1,1 @@
+tests/run/error_duplicate_fn.em:5:1: error: a function with this name is already declared in this module

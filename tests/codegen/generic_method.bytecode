@@ -1,0 +1,62 @@
+== fn Box.get (arity 1) ==
+0000    6  GET_LOCAL 0
+0002    |  GET_FIELD 0
+0004    |  INCREF  
+0005    |  RETURN  
+0006    |  CONST    0  (= 0)
+0008    |  RETURN  
+== fn Box.replaced (arity 2) ==
+0000    7  GET_LOCAL 1
+0002    |  INCREF  
+0003    |  NEW_STRUCT 0 1
+0006    |  RETURN  
+0007    |  CONST    0  (= 0)
+0009    |  RETURN  
+== fn main (arity 0) ==
+0000   10  CONST    0  (= 3)
+0002    |  NEW_STRUCT 1 1
+0005   11  GET_LOCAL 0
+0007    |  CONST    1  (= 8)
+0009    |  CALL     3 2
+0012   12  GET_LOCAL 1
+0014    |  CALL     4 1
+0017    |  CALL_NATIVE 1 1
+0020    |  POP     
+0021   13  STRING   0  (= "x")
+0023    |  NEW_STRUCT 2 1
+0026   14  GET_LOCAL 2
+0028    |  CALL     5 1
+0031    |  CALL_NATIVE 1 1
+0034    |  POP     
+0035   15  GET_LOCAL 0
+0037    |  CALL     4 1
+0040    |  DROP     0
+0042    |  DROP     1
+0044    |  DROP     2
+0046    |  RETURN  
+0047    |  CONST    2  (= 0)
+0049    |  DROP     0
+0051    |  DROP     1
+0053    |  DROP     2
+0055    |  RETURN  
+== fn Box.replaced (arity 2) ==
+0000    7  GET_LOCAL 1
+0002    |  INCREF  
+0003    |  NEW_STRUCT 0 1
+0006    |  RETURN  
+0007    |  CONST    0  (= 0)
+0009    |  RETURN  
+== fn Box.get (arity 1) ==
+0000    6  GET_LOCAL 0
+0002    |  GET_FIELD 0
+0004    |  INCREF  
+0005    |  RETURN  
+0006    |  CONST    0  (= 0)
+0008    |  RETURN  
+== fn Box.get (arity 1) ==
+0000    6  GET_LOCAL 0
+0002    |  GET_FIELD 0
+0004    |  INCREF  
+0005    |  RETURN  
+0006    |  CONST    0  (= 0)
+0008    |  RETURN  

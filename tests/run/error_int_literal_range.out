@@ -1,0 +1,1 @@
+tests/run/error_int_literal_range.em:6:13: error: integer literal is out of range for i64 (near '9223372036854775808')

@@ -1,0 +1,14 @@
+[package]
+name = "ember"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Zed extensions compile to a sandboxed WebAssembly module. zed_extension_api 0.4.x is the latest
+# release that targets wasm32-wasip1 (0.5+ moved to wasm32-wasip2); pin here so the build target
+# matches `rustup target add wasm32-wasip1`.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.4.0"

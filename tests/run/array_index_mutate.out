@@ -1,0 +1,6 @@
+grid: 2 1
+c0: 2 lines 1 tags; c1: 1
+c0 tags after reset: 2 [x,y]
+local: 1
+sample: hello c
+=> 0

@@ -1,0 +1,1 @@
+emberc: runtime error: postcondition failed in 'doubled_is_positive' (ensures, line 4)

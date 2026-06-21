@@ -1,0 +1,1 @@
+tests/run/error_string_mix.em:3:12: error: arithmetic operands must be the same numeric type (or both string for '+')

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Ember",
+  "scopeName": "source.ember",
+  "fileTypes": ["em"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#contracts" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#functions" },
+    { "include": "#calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.ember",
+          "begin": "//",
+          "end": "$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.ember",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.ember",
+          "match": "\\\\([\"\\\\{}nrt0]|.)"
+        },
+        {
+          "name": "meta.embedded.interpolation.ember",
+          "begin": "(?<!\\\\)\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.ember" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.ember" } },
+          "patterns": [
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#keywords" },
+            { "include": "#types" },
+            { "include": "#constants" },
+            { "include": "#calls" },
+            { "include": "#operators" },
+            { "include": "#punctuation" }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.ember",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.ember",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "contracts": {
+      "name": "keyword.control.contract.ember",
+      "match": "\\b(requires|ensures)\\b"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ember",
+          "match": "\\b(return|if|else|for|in|loop|break|continue|match|case)\\b"
+        },
+        {
+          "name": "keyword.declaration.ember",
+          "match": "\\b(let|var|fn|struct|enum|interface|extern)\\b"
+        },
+        {
+          "name": "keyword.concurrency.ember",
+          "match": "\\b(nursery|spawn)\\b"
+        },
+        {
+          "name": "keyword.other.ember",
+          "match": "\\b(import|as|move|mut|implements)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.ember",
+          "match": "\\b(int|float|bool|string|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64)\\b"
+        },
+        {
+          "name": "entity.name.type.ember",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.ember",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "variable.language.ember",
+          "match": "\\b(self|result)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "name": "meta.function.ember",
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.ember" },
+        "2": { "name": "entity.name.function.ember" }
+      }
+    },
+    "calls": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.ember",
+          "match": "\\b(print|println|concat|hash|abs|ceil|floor|round|sqrt|pow|parse_float|char_code|from_char_code|read_line|read_file|write_file|random|args|env|exit|channel|send|recv|close)\\b(?=\\s*\\()"
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*\\()",
+          "captures": { "1": { "name": "entity.name.function.call.ember" } }
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.ember",
+      "match": "(->|==|!=|<=|>=|&&|\\|\\||\\.\\.|[-+*/%<>=!|?])"
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.ember", "match": "[,:]" },
+        { "name": "punctuation.accessor.ember", "match": "\\." }
+      ]
+    }
+  }
+}

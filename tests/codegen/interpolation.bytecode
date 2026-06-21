@@ -1,0 +1,36 @@
+== fn main (arity 0) ==
+0000    5  STRING   0  (= "Ember")
+0002    6  CONST    0  (= 3)
+0004    |  CONST    1  (= 4)
+0006    7  CONST    2  (= 7)
+0008    8  STRING   1  (= "Hi ")
+0010    |  GET_LOCAL 0
+0012    |  TO_STRING 0
+0014    |  CONCAT  
+0015    |  STRING   2  (= ": ")
+0017    |  CONCAT  
+0018    |  GET_LOCAL 1
+0020    |  TO_STRING 0
+0022    |  CONCAT  
+0023    |  STRING   3  (= " + ")
+0025    |  CONCAT  
+0026    |  GET_LOCAL 2
+0028    |  TO_STRING 0
+0030    |  CONCAT  
+0031    |  STRING   4  (= " = ")
+0033    |  CONCAT  
+0034    |  GET_LOCAL 1
+0036    |  GET_LOCAL 2
+0038    |  ADD      0
+0040    |  TO_STRING 0
+0042    |  CONCAT  
+0043    |  STRING   5  (= ", n=")
+0045    |  CONCAT  
+0046    |  GET_LOCAL 3
+0048    |  TO_STRING 0
+0050    |  CONCAT  
+0051    |  DROP     0
+0053    |  RETURN  
+0054    |  CONST    3  (= 0)
+0056    |  DROP     0
+0058    |  RETURN  

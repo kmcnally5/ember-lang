@@ -1,0 +1,63 @@
+Program
+  Struct P
+    field x: int
+  Fn exprs
+    params:
+    body:
+      Let a
+        Binary MINUS
+          Binary PLUS
+            Int 1
+            Binary STAR
+              Int 2
+              Int 3
+          Binary PERCENT
+            Binary SLASH
+              Int 4
+              Int 2
+            Int 2
+      Let b
+        Binary OR
+          Binary AND
+            Binary EQ
+              Ident a
+              Int 1
+            Binary NEQ
+              Ident a
+              Int 2
+          Unary BANG
+            Bool false
+      Let c
+        Unary MINUS
+          Ident a
+      Let d
+        Index
+          Call
+            callee:
+              Get .method
+                Get .field
+                  Ident obj
+            args:
+              Int 1
+              Int 2
+          Int 0
+      Let e
+        Try
+          Call
+            callee:
+              Ident risky
+      Let f
+        Array (3)
+          Int 1
+          Int 2
+          Int 3
+      Let g
+        StructLit P
+          x:
+            Int 5
+      Let h
+        Binary STAR
+          Binary PLUS
+            Ident a
+            Int 1
+          Int 2

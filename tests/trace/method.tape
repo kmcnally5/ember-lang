@@ -1,0 +1,13 @@
+{"fn":"main","ip":0,"op":"CONST","line":9,"stack":[]}
+{"fn":"main","ip":2,"op":"GET_LOCAL","line":10,"stack":[10]}
+{"fn":"main","ip":4,"op":"BOX_STRUCT","line":10,"stack":[10,10]}
+{"fn":"main","ip":6,"op":"PICK","line":10,"stack":[10,"<obj>"]}
+{"fn":"main","ip":8,"op":"CONST","line":10,"stack":[10,"<obj>","<obj>"]}
+{"fn":"main","ip":10,"op":"CALL","line":10,"stack":[10,"<obj>","<obj>",15]}
+{"fn":"Counter.bump","ip":0,"op":"GET_LOCAL","line":5,"stack":[10,"<obj>","<obj>",15]}
+{"fn":"Counter.bump","ip":2,"op":"GET_FIELD","line":5,"stack":[10,"<obj>","<obj>",15,"<obj>"]}
+{"fn":"Counter.bump","ip":4,"op":"GET_LOCAL","line":5,"stack":[10,"<obj>","<obj>",15,10]}
+{"fn":"Counter.bump","ip":6,"op":"ADD","line":5,"stack":[10,"<obj>","<obj>",15,10,15]}
+{"fn":"Counter.bump","ip":8,"op":"RETURN","line":5,"stack":[10,"<obj>","<obj>",15,25]}
+{"fn":"main","ip":13,"op":"DROP_UNDER","line":10,"stack":[10,"<obj>",25]}
+{"fn":"main","ip":14,"op":"RETURN","line":10,"stack":[10,25]}

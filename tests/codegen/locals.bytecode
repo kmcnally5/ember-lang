@@ -1,0 +1,12 @@
+== fn main (arity 0) ==
+0000    4  CONST    0  (= 1)
+0002    5  CONST    1  (= 2)
+0004    6  GET_LOCAL 0
+0006    |  GET_LOCAL 1
+0008    |  ADD      0
+0010    |  SET_LOCAL 1
+0012    |  POP     
+0013    7  GET_LOCAL 1
+0015    |  RETURN  
+0016    |  CONST    2  (= 0)
+0018    |  RETURN  

@@ -1,0 +1,1 @@
+tests/run/error_spawn_outside_nursery.em:4:5: error: 'spawn' must appear inside a 'nursery' block

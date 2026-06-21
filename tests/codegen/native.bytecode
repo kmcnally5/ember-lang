@@ -1,0 +1,16 @@
+== fn main (arity 0) ==
+0000    3  STRING   0  (= "answer = ")
+0002    |  CALL_NATIVE 0 1
+0005    |  POP     
+0006    4  CONST    0  (= 6)
+0008    |  CONST    1  (= 7)
+0010    |  MUL      0
+0012    |  CALL_NATIVE 1 1
+0015    |  POP     
+0016    5  STRING   1  (= "done")
+0018    |  CALL_NATIVE 1 1
+0021    |  POP     
+0022    6  CONST    2  (= 0)
+0024    |  RETURN  
+0025    |  CONST    3  (= 0)
+0027    |  RETURN  

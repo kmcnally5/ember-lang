@@ -1,0 +1,21 @@
+scalars: [null,true,false,42,-7,3.14,0.7]
+nested: {"a":[1,2,{"b":"x"}],"n":null}
+ws: {"k":[1,2,3]}
+escapes: "quote=\" nl=\n tab=\t acute=é dash=—"
+model=opus max_tokens=2048 temp=0.7 stream=true missing=true len=4
+built={"model":"claude-opus-4-1","max_tokens":2048,"stream":true,"messages":[{"role":"user","content":"hi \"there\"\nbye"}]}
+e_trailing: ERR trailing characters after the JSON value at position 3
+e_unterminated: ERR unterminated string at position 4
+e_badcomma: ERR unexpected character ']' at position 6
+e_empty: ERR unexpected end of input at position 0
+e_badkey: ERR expected a string key in object at position 1
+e_leadzero: ERR a number may not have a leading zero at position 1
+e_traildot: ERR expected a digit after the decimal point at position 2
+e_expnodigit: ERR expected a digit in the exponent at position 2
+e_loneminus: ERR expected a digit in number at position 1
+e_dblexp: ERR trailing characters after the JSON value at position 3
+e_overrange: ERR number out of range at position 5
+astral: "😀"
+e_badsurrogate: ERR invalid low surrogate after a high surrogate at position 13
+e_toodeep: ERR maximum nesting depth (64) exceeded at position 64
+=> 0

@@ -1,0 +1,180 @@
+   6:1    IMPORT      import
+   6:8    STRING      "std/io"
+   6:17   AS          as
+   6:20   IDENT       io
+   8:1    NEWLINE     
+   8:1    INTERFACE   interface
+   8:11   IDENT       Eq
+   8:14   LBRACE      {
+   9:5    FN          fn
+   9:8    IDENT       eq
+   9:10   LPAREN      (
+   9:11   SELF        self
+   9:15   COMMA       ,
+   9:17   IDENT       other
+   9:22   COLON       :
+   9:24   IDENT       Self
+   9:28   RPAREN      )
+   9:30   ARROW       ->
+   9:33   IDENT       bool
+  10:1    NEWLINE     
+  10:1    RBRACE      }
+  12:1    NEWLINE     
+  12:1    STRUCT      struct
+  12:8    IDENT       Box
+  12:11   LT          <
+  12:12   IDENT       T
+  12:13   GT          >
+  12:15   LBRACE      {
+  13:5    IDENT       value
+  13:10   COLON       :
+  13:12   IDENT       T
+  14:1    NEWLINE     
+  14:1    RBRACE      }
+  16:1    NEWLINE     
+  16:1    ENUM        enum
+  16:6    IDENT       Tri
+  16:10   LBRACE      {
+  16:12   IDENT       A
+  16:14   IDENT       B
+  16:16   IDENT       C
+  16:18   RBRACE      }
+  18:1    NEWLINE     
+  18:1    FN          fn
+  18:4    IDENT       cover
+  18:9    LPAREN      (
+  18:10   MUT         mut
+  18:14   SELF        self
+  18:18   COMMA       ,
+  18:20   IDENT       x
+  18:21   COLON       :
+  18:23   IDENT       int
+  18:26   COMMA       ,
+  18:28   MOVE        move
+  18:33   IDENT       y
+  18:34   COLON       :
+  18:36   IDENT       float
+  18:41   RPAREN      )
+  18:43   ARROW       ->
+  18:46   IDENT       bool
+  18:51   LBRACE      {
+  19:5    LET         let
+  19:9    IDENT       a
+  19:11   ASSIGN      =
+  19:13   INT         1
+  19:15   PLUS        +
+  19:17   INT         2
+  19:19   MINUS       -
+  19:21   INT         3
+  19:23   STAR        *
+  19:25   INT         4
+  19:27   SLASH       /
+  19:29   INT         5
+  19:31   PERCENT     %
+  19:33   INT         6
+  20:5    NEWLINE     
+  20:5    VAR         var
+  20:9    IDENT       b
+  20:11   ASSIGN      =
+  20:13   IDENT       a
+  20:15   EQ          ==
+  20:18   INT         1
+  20:20   AND         &&
+  20:23   IDENT       a
+  20:25   NEQ         !=
+  20:28   INT         2
+  20:30   OR          ||
+  20:33   BANG        !
+  20:34   TRUE        true
+  21:5    NEWLINE     
+  21:5    IF          if
+  21:8    IDENT       a
+  21:10   LE          <=
+  21:13   INT         3
+  21:15   LBRACE      {
+  21:17   RETURN      return
+  21:24   FALSE       false
+  21:30   RBRACE      }
+  21:32   ELSE        else
+  21:37   LBRACE      {
+  21:39   RETURN      return
+  21:46   IDENT       b
+  21:48   GE          >=
+  21:51   INT         9
+  21:53   RBRACE      }
+  23:5    NEWLINE     
+  23:5    LOOP        loop
+  23:10   LBRACE      {
+  24:9    FOR         for
+  24:13   IDENT       i
+  24:15   IN          in
+  24:18   LBRACKET    [
+  24:19   INT         1
+  24:20   COMMA       ,
+  24:22   INT         2
+  24:23   COMMA       ,
+  24:25   INT         3
+  24:26   RBRACKET    ]
+  24:28   LBRACE      {
+  25:13   IF          if
+  25:16   IDENT       i
+  25:18   LT          <
+  25:20   INT         2
+  25:22   LBRACE      {
+  25:24   CONTINUE    continue
+  25:33   RBRACE      }
+  26:13   NEWLINE     
+  26:13   IF          if
+  26:16   IDENT       i
+  26:18   GT          >
+  26:20   INT         2
+  26:22   LBRACE      {
+  26:24   BREAK       break
+  26:30   RBRACE      }
+  27:9    NEWLINE     
+  27:9    RBRACE      }
+  28:5    NEWLINE     
+  28:5    RBRACE      }
+  30:5    NEWLINE     
+  30:5    MATCH       match
+  30:11   IDENT       x
+  30:13   LBRACE      {
+  31:9    CASE        case
+  31:14   IDENT       A
+  31:16   LBRACE      {
+  31:18   SPAWN       spawn
+  31:24   IDENT       cover
+  31:29   LPAREN      (
+  31:30   SELF        self
+  31:34   COMMA       ,
+  31:36   INT         0
+  31:37   COMMA       ,
+  31:39   FLOAT       0.0
+  31:42   RPAREN      )
+  31:44   RBRACE      }
+  32:9    NEWLINE     
+  32:9    CASE        case
+  32:14   IDENT       B
+  32:16   LBRACE      {
+  32:18   NURSERY     nursery
+  32:26   LBRACE      {
+  32:28   RBRACE      }
+  32:30   RBRACE      }
+  33:9    NEWLINE     
+  33:9    CASE        case
+  33:14   IDENT       C
+  33:16   LBRACE      {
+  33:18   RETURN      return
+  33:25   IDENT       io
+  33:27   DOT         .
+  33:28   IDENT       read
+  33:32   LPAREN      (
+  33:33   RPAREN      )
+  33:34   QUESTION    ?
+  33:36   RBRACE      }
+  34:5    NEWLINE     
+  34:5    RBRACE      }
+  35:1    NEWLINE     
+  35:1    RBRACE      }
+  36:1    NEWLINE     
+  36:1    EOF         

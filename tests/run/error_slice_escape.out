@@ -1,0 +1,3 @@
+tests/run/error_slice_escape.em:3:22: error: a Slice<T> may appear only as a parameter type or a let binding — it cannot be returned, stored in a field, or be an element (it is a borrowed view); return an owned copy with .slice(a, b) instead
+tests/run/error_slice_escape.em:3:22: error: a Slice<T> may appear only as a parameter type or a let binding — it cannot be returned, stored in a field, or be an element (it is a borrowed view); return an owned copy with .slice(a, b) instead
+tests/run/error_slice_escape.em:3:1: error: return type must be 'int', 'bool', a struct/enum, or a type parameter

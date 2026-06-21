@@ -1,0 +1,4 @@
+frame1 open=0 popup=-1
+frame2 open=1 is_file_open=1
+frame3 chose_open=1 closed_after=1
+modal_blocks_widgets=1

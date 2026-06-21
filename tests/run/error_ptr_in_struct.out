@@ -1,0 +1,2 @@
+tests/run/error_ptr_in_struct.em:4:15: error: a 'Ptr' is a linear FFI handle and cannot be a struct field
+tests/run/error_ptr_in_struct.em:4:15: help: a 'Ptr' has no destructor — keep it in a local and close it (e.g. fclose), or pass it by 'move'; it cannot be stored in an array, field, channel, or generic container (where its close obligation would be lost)

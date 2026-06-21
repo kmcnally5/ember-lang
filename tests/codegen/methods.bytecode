@@ -1,0 +1,19 @@
+== fn Counter.bump (arity 2) ==
+0000    5  GET_LOCAL 0
+0002    |  GET_FIELD 0
+0004    |  GET_LOCAL 1
+0006    |  ADD      0
+0008    |  RETURN  
+0009    |  CONST    0  (= 0)
+0011    |  RETURN  
+== fn main (arity 0) ==
+0000    9  CONST    0  (= 10)
+0002   10  GET_LOCAL 0
+0004    |  BOX_STRUCT 0
+0006    |  PICK     0
+0008    |  CONST    1  (= 15)
+0010    |  CALL     0 2
+0013    |  DROP_UNDER
+0014    |  RETURN  
+0015    |  CONST    2  (= 0)
+0017    |  RETURN  

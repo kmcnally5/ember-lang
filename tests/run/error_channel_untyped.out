@@ -1,0 +1,1 @@
+tests/run/error_channel_untyped.em:3:13: error: cannot infer the channel's element type; annotate it (e.g. let c: Channel<int> = channel(N))

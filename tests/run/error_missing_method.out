@@ -1,0 +1,1 @@
+tests/run/error_missing_method.em:3:1: error: struct is missing a method required by an interface it implements

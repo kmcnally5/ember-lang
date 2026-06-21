@@ -1,0 +1,8 @@
+c1
+  [message_start] {"type":"message_start"}
+c2
+  [content_block_delta] {"text":"Hello"}
+  [content_block_delta] {"text":" world"}
+c3
+  [message_stop] {}
+=> 0

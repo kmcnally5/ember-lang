@@ -1,0 +1,1 @@
+tests/run/error_generic_variant_type.em:4:26: error: field value type does not match the variant

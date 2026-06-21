@@ -1,0 +1,46 @@
+== fn main (arity 0) ==
+0000    3  CONST    0  (= 1)
+0002    |  CONST    1  (= 2)
+0004    |  CONST    2  (= 3)
+0006    |  CONST    3  (= 4)
+0008    |  CONST    4  (= 5)
+0010    |  NEW_ARRAY 5 4
+0013    4  CONST    5  (= 0)
+0015    5  GET_LOCAL 0
+0017    |  CONST    6  (= -1)
+0019    |  GET_LOCAL 2
+0021    |  ARRAY_LEN
+0022    |  CONST    7  (= 0)
+0024    |  FOR_ARRAY 2 3 4 5 44 (-> 0075)
+0031    6  GET_LOCAL 5
+0033    |  CONST    8  (= 2)
+0035    |  EQ      
+0036    |  JUMP_IF_FALSE 7 (-> 0046)
+0039    |  POP     
+0040    |  LOOP     19 (-> 0024)
+0043    |  JUMP     1 (-> 0047)
+0046    |  POP     
+0047    7  GET_LOCAL 5
+0049    |  CONST    9  (= 5)
+0051    |  EQ      
+0052    |  JUMP_IF_FALSE 7 (-> 0062)
+0055    |  POP     
+0056    |  JUMP     16 (-> 0075)
+0059    |  JUMP     1 (-> 0063)
+0062    |  POP     
+0063    8  GET_LOCAL 1
+0065    |  GET_LOCAL 5
+0067    |  ADD      0
+0069    |  SET_LOCAL 1
+0071    |  POP     
+0072    |  LOOP     51 (-> 0024)
+0075    |  POP     
+0076    |  POP     
+0077    |  POP     
+0078    |  POP     
+0079   10  GET_LOCAL 1
+0081    |  DROP     0
+0083    |  RETURN  
+0084    |  CONST    10  (= 0)
+0086    |  DROP     0
+0088    |  RETURN  

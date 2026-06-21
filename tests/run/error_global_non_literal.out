@@ -1,0 +1,2 @@
+tests/run/error_global_non_literal.em:8:1: error: a top-level constant must be a literal value (int, float, bool, or string)
+tests/run/error_global_non_literal.em:11:12: error: undefined variable

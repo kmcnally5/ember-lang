@@ -1,0 +1,9 @@
+prove add_nonneg: ensures @line 9 — PROVED
+{"event":"proved","fn":"add_nonneg","line":9}
+prove scale: ensures @line 17 — PROVED
+{"event":"proved","fn":"scale","line":17}
+prove diff_nonneg: ensures @line 25 — PROVED
+{"event":"proved","fn":"diff_nonneg","line":25}
+prove shift: ensures @line 32 — not proved (use --check)
+{"event":"unproved","fn":"shift","line":32}
+proved 3 of 4 ensures clause(s); 1 to check

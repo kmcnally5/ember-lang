@@ -1,0 +1,29 @@
+== fn bump_x (arity 1) ==
+0000    6  GET_LOCAL 0
+0002    |  GET_LOCAL 0
+0004    |  GET_FIELD 0
+0006    |  CONST    0  (= 1)
+0008    |  ADD      0
+0010    |  SET_FIELD 0
+0012    7  GET_LOCAL 0
+0014    |  GET_FIELD 0
+0016    |  RETURN  
+0017    |  CONST    1  (= 0)
+0019    |  RETURN  
+== fn main (arity 0) ==
+0000   10  CONST    0  (= 10)
+0002    |  CONST    1  (= 2)
+0004    |  NEW_STRUCT 0 2
+0007   11  GET_LOCAL 0
+0009    |  GET_LOCAL 0
+0011    |  GET_FIELD 0
+0013    |  CONST    2  (= 5)
+0015    |  ADD      0
+0017    |  SET_FIELD 0
+0019   12  GET_LOCAL 0
+0021    |  CALL     0 1
+0024    |  DROP     0
+0026    |  RETURN  
+0027    |  CONST    3  (= 0)
+0029    |  DROP     0
+0031    |  RETURN  

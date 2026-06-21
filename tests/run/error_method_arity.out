@@ -1,0 +1,1 @@
+tests/run/error_method_arity.em:3:47: error: wrong number of arguments to method

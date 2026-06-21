@@ -1,0 +1,1 @@
+tests/run/error_mut_self_on_let.em:17:5: error: cannot call a 'mut self' method on an immutable binding; declare it 'var' (or take 'mut')

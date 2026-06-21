@@ -1,0 +1,1 @@
+tests/run/error_no_method.em:3:47: error: no such method on this struct

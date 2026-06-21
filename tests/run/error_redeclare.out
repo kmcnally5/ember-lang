@@ -1,0 +1,1 @@
+tests/run/error_redeclare.em:5:5: error: redeclaration of a variable in the same scope

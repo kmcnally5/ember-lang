@@ -1,0 +1,2 @@
+tests/run/error_generic_bound.em:10:38: error: a type argument does not satisfy the struct's generic bound (it must implement Hash / Eq)
+tests/run/error_generic_bound.em:10:38: error: a type argument does not satisfy the struct's generic bound (it must implement Hash / Eq)

@@ -1,0 +1,37 @@
+Program
+  Import "std/io" as io
+  Let GREETING
+    String "hi"
+  Var counter
+    Int 0
+  Interface Show
+    Fn show
+      params:
+        self
+      returns: string
+      (signature)
+  Struct Pair
+    generics: A B
+    implements: Show
+    field first: A
+    field second: B
+    Fn swap
+      params:
+        mut self
+      body:
+        Return
+          (unit)
+  Enum Color
+    variant Rgb(r: int, g: int, b: int)
+    variant Named(name: string)
+    variant Transparent
+  Fn add
+    params:
+      a: int
+      b: int
+    returns: int
+    body:
+      Return
+        Binary PLUS
+          Ident a
+          Ident b

@@ -1,0 +1,15 @@
+count=5
+bytes=11
+at0=a
+at2=中
+at_oob=
+prefix3=aé中
+slice1_4=é中😀
+insert_mid=aéX中😀b
+insert_end=aé中😀b!
+insert_past=aé中😀b?
+insert_neg=<aé中😀b
+delete2=aé😀b
+delete_oob=aé中😀b
+empty_count=0
+=> 0

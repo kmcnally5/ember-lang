@@ -1,0 +1,1 @@
+tests/run/error_loop_move_recur.em:15:5: error: value moved inside a loop body (it would be moved again on the next iteration)

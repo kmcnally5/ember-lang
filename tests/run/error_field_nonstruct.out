@@ -1,0 +1,1 @@
+tests/run/error_field_nonstruct.em:2:38: error: field access requires a struct value

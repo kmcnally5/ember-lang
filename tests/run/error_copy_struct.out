@@ -1,0 +1,1 @@
+tests/run/error_copy_struct.em:12:12: error: type argument is not Copy — only scalars, strings, enums, and closures satisfy a 'Copy' bound (not a struct or array)

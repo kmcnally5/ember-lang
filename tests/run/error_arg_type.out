@@ -1,0 +1,1 @@
+tests/run/error_arg_type.em:3:27: error: argument type does not match the parameter

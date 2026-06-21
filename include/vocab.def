@@ -1,0 +1,132 @@
+// vocab.def — the single source of truth for Ember's lexical vocabulary.
+//
+// Keywords, builtins, and primitive types each appear here EXACTLY ONCE. Every consumer
+// (the lexer's keyword recogniser, the LSP's hover/completion, and the TextMate grammar
+// generator) is built by #including this file, so they cannot drift apart. See OFI-033.
+//
+// This is an X-macro table: a caller #defines the macros it cares about, #includes this
+// file, then lets the trailing #undefs clean up. A caller that wants only keywords need
+// define only EMBER_KEYWORD; the others expand to nothing.
+//
+//   EMBER_KEYWORD(tok, word, cat, gloss)
+//     tok   — the TokenType the lexer maps `word` to.
+//     word  — the reserved spelling.
+//     cat   — TextMate grammar bucket: "control", "declaration", "concurrency", "other",
+//             "contract", "bool", or "varlang" (varlang/self is coloured by a hand-authored
+//             grammar rule alongside the contextual, token-less `result`, so the generator
+//             does not emit it as a keyword group).
+//     gloss — one-line Markdown hover documentation.
+//
+//   EMBER_BUILTIN(name, sig, doc)
+//     A global built-in function. `sig` is shown in an ```ember fence on hover and MUST mirror
+//     the fixed native signature enforced in check.c; `doc` is the prose beneath it.
+//
+//   EMBER_PRIM(name, doc)
+//     A primitive type name. Its hover signature is just the name; `doc` is the prose.
+
+#ifndef EMBER_KEYWORD
+#define EMBER_KEYWORD(tok, word, cat, gloss)
+#endif
+#ifndef EMBER_BUILTIN
+#define EMBER_BUILTIN(name, sig, doc)
+#endif
+#ifndef EMBER_PRIM
+#define EMBER_PRIM(name, doc)
+#endif
+
+
+// ---- keywords -------------------------------------------------------------------------------
+// Order here is the grammar/completion order; within a `cat` it sets the alternation order.
+
+EMBER_KEYWORD(TOK_REQUIRES,   "requires",   "contract",    "`requires` — a function precondition (checked in debug builds).")
+EMBER_KEYWORD(TOK_ENSURES,    "ensures",    "contract",    "`ensures` — a function postcondition; use `result` for the return value.")
+
+EMBER_KEYWORD(TOK_RETURN,     "return",     "control",     "`return` — return a value from the enclosing function.")
+EMBER_KEYWORD(TOK_IF,         "if",         "control",     "`if` — conditional branch.")
+EMBER_KEYWORD(TOK_ELSE,       "else",       "control",     "`else` — the alternative branch of an `if`.")
+EMBER_KEYWORD(TOK_FOR,        "for",        "control",     "`for` — iterate over a range or an array.")
+EMBER_KEYWORD(TOK_IN,         "in",         "control",     "`in` — the iterable in a `for` loop.")
+EMBER_KEYWORD(TOK_LOOP,       "loop",       "control",     "`loop` — an unconditional loop; exit with `break`.")
+EMBER_KEYWORD(TOK_BREAK,      "break",      "control",     "`break` — exit the enclosing loop.")
+EMBER_KEYWORD(TOK_CONTINUE,   "continue",   "control",     "`continue` — skip to the next loop iteration.")
+EMBER_KEYWORD(TOK_MATCH,      "match",      "control",     "`match` — branch on the variant of an enum value.")
+EMBER_KEYWORD(TOK_CASE,       "case",       "control",     "`case` — a single arm of a `match`.")
+
+EMBER_KEYWORD(TOK_LET,        "let",        "declaration", "`let` — bind a value to an immutable name.")
+EMBER_KEYWORD(TOK_VAR,        "var",        "declaration", "`var` — declare a reassignable (mutable) variable.")
+EMBER_KEYWORD(TOK_FN,         "fn",         "declaration", "`fn` — declare a function.")
+EMBER_KEYWORD(TOK_STRUCT,     "struct",     "declaration", "`struct` — declare a record type with named fields.")
+EMBER_KEYWORD(TOK_ENUM,       "enum",       "declaration", "`enum` — declare a tagged-union type with variants.")
+EMBER_KEYWORD(TOK_INTERFACE,  "interface",  "declaration", "`interface` — declare a set of methods a type can implement.")
+EMBER_KEYWORD(TOK_EXTERN,     "extern",     "declaration", "`extern \"c\"` — declare foreign C functions (FFI).")
+
+EMBER_KEYWORD(TOK_NURSERY,    "nursery",    "concurrency", "`nursery` — a structured-concurrency scope that joins its spawned fibers.")
+EMBER_KEYWORD(TOK_SPAWN,      "spawn",      "concurrency", "`spawn` — start a concurrent fiber inside a `nursery`.")
+
+EMBER_KEYWORD(TOK_IMPORT,     "import",     "other",       "`import` — bring another module into scope.")
+EMBER_KEYWORD(TOK_AS,         "as",         "other",       "`as` — rename an import, or cast between numeric types.")
+EMBER_KEYWORD(TOK_MOVE,       "move",       "other",       "`move` — transfer ownership of a value.")
+EMBER_KEYWORD(TOK_MUT,        "mut",        "other",       "`mut` — mark a binding or parameter as mutable.")
+EMBER_KEYWORD(TOK_IMPLEMENTS, "implements", "other",       "`implements` — state that a type satisfies an interface.")
+
+EMBER_KEYWORD(TOK_SELF,       "self",       "varlang",     "`self` — the receiver inside a method.")
+
+EMBER_KEYWORD(TOK_TRUE,       "true",       "bool",        "`true` — the boolean true value.")
+EMBER_KEYWORD(TOK_FALSE,      "false",      "bool",        "`false` — the boolean false value.")
+
+
+// ---- builtin functions ----------------------------------------------------------------------
+// Order here is the grammar's builtin-call alternation order; hover looks up by name.
+
+EMBER_BUILTIN("print",         "fn print(value: int | float | string)",     "Write a number or string to stdout with no trailing newline.")
+EMBER_BUILTIN("println",       "fn println(value: int | float | string)",   "Write a number or string to stdout followed by a newline.")
+EMBER_BUILTIN("concat",        "fn concat(parts: [string]) -> string",      "Join an array of strings into a single string.")
+EMBER_BUILTIN("hash",          "fn hash(s: string) -> int",                 "A stable hash of the string `s`.")
+EMBER_BUILTIN("abs",           "fn abs(x: float) -> float",                 "The absolute value of `x`.")
+EMBER_BUILTIN("ceil",          "fn ceil(x: float) -> float",                "The smallest whole number not less than `x`.")
+EMBER_BUILTIN("floor",         "fn floor(x: float) -> float",               "The largest whole number not greater than `x`.")
+EMBER_BUILTIN("round",         "fn round(x: float) -> float",               "`x` rounded to the nearest whole number.")
+EMBER_BUILTIN("sqrt",          "fn sqrt(x: float) -> float",                "The square root of `x`.")
+EMBER_BUILTIN("pow",           "fn pow(base: float, exp: float) -> float",  "`base` raised to the power `exp`.")
+EMBER_BUILTIN("parse_float",   "fn parse_float(s: string) -> float",        "Parse the string `s` as a floating-point number.")
+EMBER_BUILTIN("char_code",     "fn char_code(s: string) -> int",            "The code point of the first character of `s`.")
+EMBER_BUILTIN("from_char_code","fn from_char_code(code: int) -> string",    "A one-character string for the given code point.")
+EMBER_BUILTIN("read_line",     "fn read_line() -> string",                  "Read one line from stdin, without the trailing newline.")
+EMBER_BUILTIN("read_file",     "fn read_file(path: string) -> string",      "Read the file at `path` and return its whole contents.")
+EMBER_BUILTIN("write_file",    "fn write_file(path: string, text: string)", "Write `text` to the file at `path`, replacing what was there.")
+EMBER_BUILTIN("random",        "fn random() -> float",                      "A random float in the half-open range [0, 1).")
+
+// Program environment: command-line arguments, environment variables, and exit code.
+EMBER_BUILTIN("args",          "fn args() -> [string]",                     "The command-line arguments passed to the program (everything after the source file). Empty when none.")
+EMBER_BUILTIN("env",           "fn env(name: string) -> string",            "The value of environment variable `name`, or the empty string if it is unset.")
+EMBER_BUILTIN("exit",          "fn exit(code: int)",                        "Terminate the program immediately with the given exit code (0 = success).")
+
+// Channel operations (structured concurrency — see the `nursery`/`spawn` keywords). Generic over
+// the channel's element type T; the type checker enforces the concrete element type per channel.
+EMBER_BUILTIN("channel",       "fn channel<T>(capacity: int) -> Channel<T>", "Create a typed channel buffered to hold up to `capacity` values. Annotate the element type at the binding (e.g. `let c: Channel<int> = channel(N)`).")
+EMBER_BUILTIN("send",          "fn send<T>(ch: Channel<T>, value: T)",       "Move `value` into the channel `ch`, blocking if the buffer is full. Ownership of `value` passes to the receiver.")
+EMBER_BUILTIN("recv",          "fn recv<T>(ch: Channel<T>) -> Option<T>",    "Receive the next value from `ch`, blocking until one is available. Yields `Some(v)` while values flow, then `None` once the channel is closed and drained.")
+EMBER_BUILTIN("close",         "fn close<T>(ch: Channel<T>)",                "Close the channel `ch`: no more values may be sent. Pending `recv` calls drain the buffer, then yield `None`.")
+
+
+// ---- primitive types ------------------------------------------------------------------------
+
+EMBER_PRIM("int",    "A signed integer (the default 64-bit-wide integer type).")
+EMBER_PRIM("float",  "A 64-bit IEEE-754 floating-point number.")
+EMBER_PRIM("bool",   "A boolean: either `true` or `false`.")
+EMBER_PRIM("string", "An immutable, reference-counted UTF-8 string.")
+EMBER_PRIM("i8",     "An 8-bit signed integer.")
+EMBER_PRIM("i16",    "A 16-bit signed integer.")
+EMBER_PRIM("i32",    "A 32-bit signed integer.")
+EMBER_PRIM("i64",    "A 64-bit signed integer.")
+EMBER_PRIM("u8",     "An 8-bit unsigned integer.")
+EMBER_PRIM("u16",    "A 16-bit unsigned integer.")
+EMBER_PRIM("u32",    "A 32-bit unsigned integer.")
+EMBER_PRIM("u64",    "A 64-bit unsigned integer.")
+EMBER_PRIM("f32",    "A 32-bit IEEE-754 floating-point number.")
+EMBER_PRIM("f64",    "A 64-bit IEEE-754 floating-point number.")
+
+
+#undef EMBER_KEYWORD
+#undef EMBER_BUILTIN
+#undef EMBER_PRIM

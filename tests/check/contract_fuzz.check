@@ -1,0 +1,6 @@
+check abs_val: FAILED
+  counterexample: abs_val(-1)  =>  postcondition failed in 'abs_val' (ensures, line 8)
+{"event":"check_failed","fn":"abs_val","input":"abs_val(-1)","detail":"postcondition failed in 'abs_val' (ensures, line 8)"}
+check safe_div: ok (300 cases)
+check square: ok (300 cases)
+checked 3 function(s): 2 passed, 1 failed

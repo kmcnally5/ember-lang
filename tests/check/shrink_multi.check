@@ -1,0 +1,4 @@
+check diff_nonneg: FAILED
+  counterexample: diff_nonneg(0, 1)  =>  postcondition failed in 'diff_nonneg' (ensures, line 6)
+{"event":"check_failed","fn":"diff_nonneg","input":"diff_nonneg(0, 1)","detail":"postcondition failed in 'diff_nonneg' (ensures, line 6)"}
+checked 1 function(s): 0 passed, 1 failed

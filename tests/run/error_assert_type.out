@@ -1,0 +1,1 @@
+tests/run/error_assert_type.em:3:5: error: assert's condition must be a bool

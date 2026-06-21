@@ -1,0 +1,3 @@
+tests/run/error_ptr_reassign_leak.em:9:9: error: reassigning 'f' leaks the 'Ptr' handle it still holds
+tests/run/error_ptr_reassign_leak.em:9:9: help: close the current handle first (e.g. fclose) — a 'Ptr' has no destructor, so an overwritten handle is lost
+tests/run/error_ptr_reassign_leak.em:8:5: note: the leaked handle was opened here

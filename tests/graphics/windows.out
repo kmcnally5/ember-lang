@@ -1,0 +1,6 @@
+registered=3 alpha_z=1 beta_z=2
+alpha_h=50 (empty fit=50) body_h=84 (one-row fit=84)
+PASS: windows auto-sized to their content
+raised=1 dragging=1
+dx=30 dy=20
+hovered_active=7 occluded_active=-1

@@ -1,0 +1,8 @@
+orig0=MUT clone0=a
+clone1.msgs=2
+c=x d=x
+nums=3 copy=4
+grid0=2 row=3
+field_orig=2 field_clone=3
+m=2 n=3 m_has3=false n_has3=true
+=> 0

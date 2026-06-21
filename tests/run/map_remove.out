@@ -1,0 +1,8 @@
+inserted size=12
+removed 3 size=9
+k0=0 k1=1 k2=2 k3=_ k4=_ k5=5 k6=6 k7=_ k8=8 k9=9 k10=10 k11=11 
+reuse k4=400 update k0=99 size=10
+absent=F first=T second=F size=9
+p0.b=0 p1.b=1 p2=_ p3.b=9 p4.b=16 p5=_ p6.b=36 p7.b=49 
+struct size=6 removed=2
+=> 0

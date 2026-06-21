@@ -1,0 +1,25 @@
+== fn main (arity 0) ==
+0000    4  CONST    0  (= 0)
+0002    6  GET_LOCAL 0
+0004    |  CONST    1  (= 2)
+0006    |  MUL      0
+0008    7  GET_LOCAL 1
+0010    |  CONST    2  (= 6)
+0012    |  GE       0
+0014    |  JUMP_IF_FALSE 8 (-> 0025)
+0017    |  POP     
+0018    |  POP     
+0019    |  JUMP     17 (-> 0039)
+0022    |  JUMP     1 (-> 0026)
+0025    |  POP     
+0026    8  GET_LOCAL 0
+0028    |  CONST    3  (= 1)
+0030    |  ADD      0
+0032    |  SET_LOCAL 0
+0034    |  POP     
+0035    |  POP     
+0036    |  LOOP     37 (-> 0002)
+0039   10  GET_LOCAL 0
+0041    |  RETURN  
+0042    |  CONST    4  (= 0)
+0044    |  RETURN  

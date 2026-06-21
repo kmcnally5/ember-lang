@@ -1,0 +1,5 @@
+root: [editor] nodes=1
+split: [editor,terminal,sidebar] nodes=5
+close terminal: [editor,sidebar] nodes=3
+state: terminal.scroll=-1 sidebar.width=240
+empty: [] nodes=0 root=-1

@@ -1,0 +1,1 @@
+tests/run/error_generic_arity.em:4:27: error: unknown struct type in construction

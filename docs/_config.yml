@@ -1,0 +1,13 @@
+# GitHub Pages (Jekyll) config for ember-lang.org. Pages is served from this /docs folder on the
+# main branch; Jekyll renders each Markdown file to a routed HTML page (docs/language.md ->
+# /language). See docs/architecture.md for the hosting decision.
+title: Ember
+description: A statically-typed, brace-delimited systems language — safe without a GC.
+theme: jekyll-theme-minima
+# Keep build artifacts and dev-internal docs out of the PUBLISHED site (they stay in the repo for
+# contributors — this only controls what becomes a web page on ember-lang.org).
+exclude:
+  - .DS_Store
+  - CNAME
+  - claude-app-roadmap.md
+  - design/

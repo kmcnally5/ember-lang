@@ -5,9 +5,15 @@
 
 use zed_extension_api::{self as zed, Command, LanguageServerId, Result};
 
-// Fallback emberc path used when the binary is not found on the worktree PATH — the same default the
-// VS Code extension uses, where `make install` deploys it. Put emberc on your PATH to override it.
-const DEFAULT_EMBERC: &str = "/Users/karlmcnally/.ember/bin/emberc";
+// Fallback when emberc is not found on the worktree PATH. `make install` deploys it to ~/.ember/bin,
+// so resolve that against $HOME (portable — no hardcoded user path); if $HOME is unavailable, fall
+// back to a bare "emberc" and rely on PATH. Put emberc on your PATH to override either.
+fn default_emberc() -> String {
+    match std::env::var("HOME") {
+        Ok(home) => format!("{home}/.ember/bin/emberc"),
+        Err(_) => "emberc".to_string(),
+    }
+}
 
 struct EmberExtension;
 
@@ -24,7 +30,7 @@ impl zed::Extension for EmberExtension {
         // Prefer an emberc on the worktree PATH; otherwise fall back to the install location.
         let command = worktree
             .which("emberc")
-            .unwrap_or_else(|| DEFAULT_EMBERC.to_string());
+            .unwrap_or_else(default_emberc);
         Ok(Command {
             command,
             args: vec!["--lsp".to_string()],

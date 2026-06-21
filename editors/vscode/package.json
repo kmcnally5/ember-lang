@@ -4,6 +4,10 @@
   "description": "Ember language support: syntax highlighting plus diagnostics, hover, go-to-definition, completion, and document symbols via the in-tree emberc language server.",
   "version": "0.1.0",
   "publisher": "ember",
+  "license": "MIT",
+  "homepage": "https://ember-lang.org",
+  "repository": { "type": "git", "url": "https://github.com/kmcnally5/ember-lang.git" },
+  "bugs": { "url": "https://github.com/kmcnally5/ember-lang/issues" },
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages"],
   "activationEvents": ["onLanguage:ember"],
@@ -29,13 +33,13 @@
       "properties": {
         "emberLsp.serverPath": {
           "type": "string",
-          "default": "/Users/karlmcnally/.ember/bin/emberc",
-          "description": "Absolute path to the emberc binary (started with --lsp)."
+          "default": "",
+          "description": "Absolute path to the emberc binary (started with --lsp). Leave empty to use the default install location (~/.ember/bin/emberc, where `make install` deploys it)."
         },
         "emberLsp.stdPath": {
           "type": "string",
-          "default": "/Users/karlmcnally/.ember/std",
-          "description": "Path to the Ember standard library (passed as EMBER_STD). Leave as the default unless you moved the install."
+          "default": "",
+          "description": "Path to the Ember standard library (passed as EMBER_STD). Leave empty to use the default install location (~/.ember/std)."
         }
       }
     }

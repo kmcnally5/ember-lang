@@ -1569,3 +1569,29 @@ implemented so it rides the EXISTING shareable machinery rather than adding a pa
 reduced to these rules); each vector has a reject test, the accept path has run + native-differential
 golden tests, and Crucible gained an **rc seed mode** (a quarter of its seeds declare `rc struct`s and
 churn them through the aggregate/leak/diff/double-drop oracles) — 187 seeds clean.
+
+## Decision: the website (ember-lang.org) is GitHub Pages from `/docs`; the Zed grammar is its own published repo
+
+Two repo/toolchain decisions made while preparing the first public push:
+
+- **Website** — `ember-lang.org` is served by **GitHub Pages from the `main` branch `/docs` folder**
+  (default Jekyll). The docs are already Markdown, so Jekyll renders each to a routed page
+  (`docs/language.md` → `/language`) with no build pipeline; `docs/index.md` is the landing page and
+  `docs/_config.yml` sets the theme. The custom domain lives in `docs/CNAME` (`ember-lang.org`).
+  Chosen over a `gh-pages` branch (extra sync, no gain) and over an Actions/static-site-generator
+  build (Actions builds ignore the `CNAME` file and add a pipeline to own — overkill for v1). Root
+  files outside `/docs` (MANIFESTO, LICENSE) are linked from the landing page via GitHub blob URLs so
+  the published site stays scoped to `/docs`. `ember-lang.com` will 301-redirect to `.org` at the
+  registrar (GitHub Pages allows one custom domain per repo).
+
+- **Zed grammar** — the tree-sitter grammar is published as its **own GitHub repo**
+  (`github.com/kmcnally5/tree-sitter-ember`) and referenced from `editors/zed/extension.toml` by
+  `https` URL + pinned `rev`. This is exactly how Zed loads grammars: at extension *install* it clones
+  the grammar repo at that rev and compiles `parser.c` to wasm locally, once, then caches it — no
+  per-edit network and no dependency on a clone of the compiler repo. Chosen over a submodule (Zed
+  fetches the grammar repo itself regardless, so a submodule adds friction for no functional gain) and
+  over vendoring into the main repo (Zed's published-extension loader expects a grammar `repository`,
+  so a path-only vendor isn't the supported path and loses cross-editor reuse). The grammar's
+  working clone (`editors/zed/tree-sitter-ember/`) and Zed's fetch-cache (`editors/zed/grammars/`)
+  stay gitignored. Rev-bump flow: edit `grammar.js` → `tree-sitter generate` → commit + push the
+  grammar repo → update `rev` in `extension.toml`.

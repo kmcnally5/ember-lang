@@ -545,6 +545,20 @@ in Ember over a minimal native base, in a file, and `import` it like any other m
   open-addressing table as `std/map`, storing keys only. Construct it as `Set<string> { slots: [],
   count: 0 }`, then `s.add(key)` (a duplicate is a no-op), `s.has(key) -> bool`, `s.size()`, and
   `s.items() -> [K]` (bucket order). Membership and insertion are amortised O(1).
+- **`std/slotmap`** — `SlotMap<V>`, a generic **generational arena**: it owns the values and hands
+  out small copyable `Handle`s (a slot index + a generation) instead of pointers, separating
+  *identity* (the handle) from *ownership* (the store). Construct it as `SlotMap<V> { items: [],
+  gen: [], free: [], count: 0 }`, then `a.insert(v) -> Handle`, `a.get(h) -> Option<V>`,
+  `a.contains(h)`, `a.replace(h, v) -> bool` (overwrite a live slot, keeping the handle valid),
+  `a.remove(h) -> bool`, `a.values() -> [V]`, `a.handles() -> [Handle]`, `a.size()`, `a.is_empty()`.
+  Removing a value **bumps its slot's generation**, so every outstanding handle to it goes stale and
+  reads back as `None` rather than a dangling value — the C raw-index footgun (a silent wrong-entity
+  read after a slot is recycled, the ABA bug) becomes a safe `Option` by construction. Freed slots
+  are recycled (reuse is O(1) via a free-list); a move-type `V` is **deep-cloned on store** like a
+  `std/map` value, so the arena owns its copy. There is no in-place `get_mut` (Ember has no interior
+  mutability) — read out, edit, and `replace`. This is the blessed answer for graph- and pool-shaped
+  data (entity tables, retained UI nodes, object pools) that [the manifesto](../MANIFESTO.md)
+  promises in place of escalating a borrow checker.
 
 ```ember
 import "std/map" as mp
@@ -558,6 +572,20 @@ fn main() -> int {
         }
     }
     return counts.size()      // 3 distinct words
+}
+```
+
+```ember
+import "std/slotmap" as sm
+
+fn main() -> int {
+    var arena = sm.SlotMap<int> { items: [], gen: [], free: [], count: 0 }
+    let h = arena.insert(42)
+    arena.remove(h)                 // bumps the slot's generation
+    match arena.get(h) {            // the stale handle no longer resolves
+        case Some(v) { return v }   // not taken — no dangling read
+        case None    { return 0 }   // taken: a removed handle is a safe None
+    }
 }
 ```
 

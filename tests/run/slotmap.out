@@ -1,0 +1,14 @@
+size=2 empty=false
+h1=(1,2)
+replace=true
+h1'=(10,20)
+remove=true contains_h1=false size=1
+h1 stale -> None
+remove_again=false
+h3.idx=0 h3.gen=1 h1.gen=0
+old h1 still None after reuse
+h3=(9,9)
+h2=(3,4)
+values: (9,9) (3,4)
+handles=2 size=2
+=> 0

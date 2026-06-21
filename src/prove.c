@@ -191,8 +191,8 @@ static int expr_to_linear(Env *env, const Expr *e, Linear *out) {
 
 
 // add_atom appends constraint `lin ⊵ 0` to the set, respecting the budget.
-static int add_atom(Constraint *cs, int *n, Linear lin, int strict) {
-    if (*n >= PROVE_MAX_CONSTR) {
+static int add_atom(Constraint *cs, int *n, int cap, Linear lin, int strict) {
+    if (*n >= cap) {   // OFI-101: bound against the REAL buffer capacity, not the global constraint budget
         return 0;
     }
     cs[*n].lin    = lin;
@@ -221,10 +221,10 @@ static Linear lin_sub(Env *env, Linear a, Linear b) {
 // clause_to_constraints turns a boolean contract expression into a conjunction of constraints,
 // splitting `&&` and equality. Returns 0 if any part is outside the linear fragment (`!=`, `||`,
 // calls, …). The appended constraints are the assertion that the clause HOLDS.
-static int clause_to_constraints(Env *env, const Expr *e, Constraint *cs, int *n) {
+static int clause_to_constraints(Env *env, const Expr *e, Constraint *cs, int *n, int cap) {
     if (e->kind == EXPR_BINARY && e->as.binary.op == TOK_AND) {
-        return clause_to_constraints(env, e->as.binary.left, cs, n) &&
-               clause_to_constraints(env, e->as.binary.right, cs, n);
+        return clause_to_constraints(env, e->as.binary.left, cs, n, cap) &&
+               clause_to_constraints(env, e->as.binary.right, cs, n, cap);
     }
     if (e->kind != EXPR_BINARY) {
         return 0;
@@ -235,13 +235,13 @@ static int clause_to_constraints(Env *env, const Expr *e, Constraint *cs, int *n
         return 0;
     }
     switch (e->as.binary.op) {
-        case TOK_LE: return add_atom(cs, n, lin_sub(env, r, l), 0);   // l <= r  ⇒  r - l >= 0
-        case TOK_LT: return add_atom(cs, n, lin_sub(env, r, l), 1);   // l <  r  ⇒  r - l >  0
-        case TOK_GE: return add_atom(cs, n, lin_sub(env, l, r), 0);
-        case TOK_GT: return add_atom(cs, n, lin_sub(env, l, r), 1);
+        case TOK_LE: return add_atom(cs, n, cap, lin_sub(env, r, l), 0);   // l <= r  ⇒  r - l >= 0
+        case TOK_LT: return add_atom(cs, n, cap, lin_sub(env, r, l), 1);   // l <  r  ⇒  r - l >  0
+        case TOK_GE: return add_atom(cs, n, cap, lin_sub(env, l, r), 0);
+        case TOK_GT: return add_atom(cs, n, cap, lin_sub(env, l, r), 1);
         case TOK_EQ:                                                  // l == r ⇒ both directions
-            return add_atom(cs, n, lin_sub(env, l, r), 0) &&
-                   add_atom(cs, n, lin_sub(env, r, l), 0);
+            return add_atom(cs, n, cap, lin_sub(env, l, r), 0) &&
+                   add_atom(cs, n, cap, lin_sub(env, r, l), 0);
         default: return 0;
     }
 }
@@ -384,7 +384,7 @@ int prove_fn_verdicts(const FnDecl *fn, int *out_proved) {
     if (env.nvars >= 0) {
         for (size_t i = 0; i < fn->requires_count; i++) {
             int save = nreq;
-            if (!clause_to_constraints(&env, fn->requires_clauses[i], req, &nreq) || env.overflow) {
+            if (!clause_to_constraints(&env, fn->requires_clauses[i], req, &nreq, PROVE_MAX_CONSTR) || env.overflow) {
                 nreq = save;         // un-model a partially-added or unmodelable clause
                 env.overflow = 0;
             }
@@ -399,7 +399,7 @@ int prove_fn_verdicts(const FnDecl *fn, int *out_proved) {
             env.result = &result_lin;
             Constraint atoms[PROVE_MAX_ATOMS];
             int natoms = 0;
-            if (clause_to_constraints(&env, clause, atoms, &natoms) && !env.overflow && natoms > 0) {
+            if (clause_to_constraints(&env, clause, atoms, &natoms, PROVE_MAX_ATOMS) && !env.overflow && natoms > 0) {
                 proved = 1;
                 for (int a = 0; a < natoms && proved; a++) {
                     env.overflow = 0;

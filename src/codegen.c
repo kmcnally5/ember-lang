@@ -2589,7 +2589,7 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
                                   cg_variants, total_variants, plan);
     }
 
-    free(cg_structs);
+    free_cg_structs(cg_structs, total_structs);   // OFI-104: also frees each entry's field_names (matches the error path)
     free(cg_variants);
     free(fn_by_fi);
     free(struct_of);

@@ -6295,6 +6295,7 @@ static void check_callable(Checker *c, const FnDecl *fn, SemType self_type,
     c->local_count = 0;   // each function starts with a fresh scope
     c->scope_depth = 0;
     c->loop_depth  = 0;
+    c->unreachable = 0;   // OFI-100: each function body starts reachable (don't inherit a prior fn's diverging return)
 
     // Parameters become the function's first locals. A plain parameter is an
     // immutable borrow; `mut`/`move` make it a mutable place (its fields may be
@@ -7669,6 +7670,7 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
     c.scope_depth    = 0;
     c.loop_depth     = 0;
     c.loop_backedge_moved = NULL;   // OFI-074
+    c.unreachable    = 0;   // OFI-100: initialise the diverging-code flag (don't read indeterminate stack)
     c.nursery_depth  = 0;
     c.fn_count        = 0;
     c.structs         = NULL;

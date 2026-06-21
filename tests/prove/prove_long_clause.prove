@@ -1,0 +1,3 @@
+prove nonneg: ensures @line 7 — not proved (use --check)
+{"event":"unproved","fn":"nonneg","line":7}
+proved 0 of 1 ensures clause(s); 1 to check

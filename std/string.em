@@ -53,7 +53,7 @@ fn repeat(s: string, n: int) -> string {
     var out: [string] = []
     var i = 0
     loop {
-        if i == n { return concat(out) }
+        if i >= n { return concat(out) }   // OFI-103: >= so any n <= 0 terminates (== is never met for negative n)
         out.append(s)
         i = i + 1
     }

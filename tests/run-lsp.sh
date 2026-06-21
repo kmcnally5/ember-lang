@@ -824,4 +824,49 @@ else:
         fail("server crashed under request churn (returncode %d) — uninitialised-memory "
              "regression in the front end (sweep of examples/graphics/09_ui.em)" % sp.returncode)
     print("lsp: passed — crash regression (%d requests over examples/graphics/09_ui.em, no crash)" % (rid - 100))
+
+
+# ---- OFI-102: malformed-input hardening (giant Content-Length + pathologically deep JSON) ---------
+# A long-lived LSP server must survive hostile/buggy client framing. (1) An absurd Content-Length is
+# rejected (read_message returns NULL, the loop treats it as a closed stream) instead of malloc'ing
+# terabytes. (2) JSON nested far past JSON_MAX_DEPTH fails the parse (json_parse -> NULL -> the message
+# is skipped) instead of overflowing the C stack. Either way the process must NOT crash, and after a
+# skipped bad message it must keep serving the next valid request.
+def serve_raw(raw):
+    return subprocess.run([os.environ["BIN"], "--lsp"], input=raw, capture_output=True, env=os.environ)
+
+def frames_of(buf):
+    res = []; p = 0
+    while p < len(buf):
+        q = buf.find(b"\r\n\r\n", p)
+        if q < 0:
+            break
+        h = buf[p:q].decode()
+        L = int(next(x for x in h.split("\r\n") if x.lower().startswith("content-length:")).split(":")[1])
+        res.append(json.loads(buf[q+4:q+4+L])); p = q + 4 + L
+    return res
+
+INIT = frame({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}})
+
+# (1) absurd Content-Length after a valid initialize, then EOF — must reject, not OOM/crash.
+r1 = serve_raw(INIT + b"Content-Length: 99999999999999\r\n\r\n")
+if r1.returncode != 0:
+    fail("server crashed/OOM'd on an absurd Content-Length (returncode %d) — OFI-102" % r1.returncode)
+if 1 not in {m.get("id") for m in frames_of(r1.stdout)}:
+    fail("server did not answer initialize before the absurd Content-Length — OFI-102")
+
+# (2) JSON nested far past JSON_MAX_DEPTH (1000), framed correctly, then a second initialize — the deep
+# message is skipped and the server keeps serving (still answers id=3), with no stack overflow.
+DEPTH = 100000
+deep_body = b'{"jsonrpc":"2.0","id":2,"method":"x","params":' + b"[" * DEPTH + b"]" * DEPTH + b"}"
+deep = (INIT + (b"Content-Length: %d\r\n\r\n" % len(deep_body)) + deep_body
+        + frame({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"capabilities":{}}})
+        + frame({"jsonrpc":"2.0","method":"exit"}))
+r2 = serve_raw(deep)
+if r2.returncode != 0:
+    fail("server crashed on %d-deep JSON (returncode %d) — JSON_MAX_DEPTH guard missing? OFI-102" % (DEPTH, r2.returncode))
+if 3 not in {m.get("id") for m in frames_of(r2.stdout)}:
+    fail("server did not keep serving after a %d-deep JSON message was skipped — OFI-102" % DEPTH)
+print("lsp: passed — malformed-input hardening (absurd Content-Length rejected; %d-deep JSON capped, "
+      "server survives + keeps serving) [OFI-102]" % DEPTH)
 PY

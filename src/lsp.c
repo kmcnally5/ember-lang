@@ -32,6 +32,10 @@
 
 // ---- transport (LSP base protocol: `Content-Length` framing over stdio) ------------------------
 
+// OFI-102: cap an LSP message body at 64 MiB — a malformed/huge Content-Length must be rejected,
+// not handed straight to malloc (DoS / OOM on bad editor input).
+#define LSP_MAX_CONTENT_LENGTH (64L * 1024 * 1024)
+
 // read_message reads one framed message body (NUL-terminated, owned), or NULL at end of stream.
 static char *read_message(void) {
     long content_length = -1;
@@ -58,10 +62,13 @@ static char *read_message(void) {
             content_length = strtol(line + 15, NULL, 10);
         }
     }
-    if (content_length < 0) {
-        return NULL;
+    if (content_length < 0 || content_length > LSP_MAX_CONTENT_LENGTH) {
+        return NULL;                           // OFI-102: reject negative / absurdly large lengths
     }
     char  *body = malloc((size_t)content_length + 1);
+    if (body == NULL) {
+        return NULL;                           // OFI-102: malloc can fail on a large length
+    }
     size_t got  = 0;
     while (got < (size_t)content_length) {
         size_t r = fread(body + got, 1, (size_t)content_length - got, stdin);

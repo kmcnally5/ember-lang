@@ -25,9 +25,14 @@ struct JsonValue {
 
 // ---- reader -----------------------------------------------------------------------------------
 
+// OFI-102: hard cap on nesting depth so a pathologically deep JSON document (e.g. thousands of
+// nested arrays from a malicious LSP client) fails the parse instead of overflowing the C stack.
+#define JSON_MAX_DEPTH 1000
+
 typedef struct {
     const char *p;
     int         ok;
+    int         depth;      // current nesting depth, checked against JSON_MAX_DEPTH
 } Parser;
 
 
@@ -253,7 +258,8 @@ static JsonValue *parse_object(Parser *ps) {
 
 
 
-static JsonValue *parse_value(Parser *ps) {
+// parse_value_inner is the actual dispatch; the public parse_value wraps it with a depth guard.
+static JsonValue *parse_value_inner(Parser *ps) {
     skip_ws(ps);
     char c = *ps->p;
     if (c == '"') {
@@ -292,11 +298,26 @@ static JsonValue *parse_value(Parser *ps) {
 }
 
 
+// OFI-102: bound recursion depth. parse_array/parse_object recurse back through parse_value, so
+// counting entries here caps total nesting; on overflow we fail the parse cleanly instead of
+// overflowing the C stack.
+static JsonValue *parse_value(Parser *ps) {
+    if (++ps->depth > JSON_MAX_DEPTH) {
+        ps->ok = 0;
+        ps->depth--;
+        return NULL;
+    }
+    JsonValue *v = parse_value_inner(ps);
+    ps->depth--;
+    return v;
+}
+
+
 
 
 
 JsonValue *json_parse(const char *text) {
-    Parser ps = { text, 1 };
+    Parser ps = { text, 1, 0 };
     JsonValue *v = parse_value(&ps);
     if (!ps.ok) {
         json_free(v);

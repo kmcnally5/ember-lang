@@ -44,6 +44,14 @@ while [ "$i" -le "$COUNT" ]; do
     prog="$TMP/p.em"
     "$GEN" "$i" > "$prog"
     want=$(sed -n 's,^//EXPECT:,,p' "$prog" | head -1)
+    # OFI-100: for reject seeds, declare the leak AFTER a return-ending function — exercising the
+    # cross-function `unreachable`-bleed path (the leak scan must run regardless of declaration
+    # order). Pre-fix this made every reject seed compile clean (a silent leak → UNSOUND); the
+    # checker's per-function `unreachable` reset is what keeps them correctly rejected.
+    if [ "$want" = "reject" ]; then
+        { printf 'fn zzz_ledger_diverge() -> int { return 0 }\n'; cat "$prog"; } > "$prog.x"
+        mv "$prog.x" "$prog"
+    fi
     out=$("$EMB" --emit=bytecode "$prog" 2>&1)
     has_err=0; printf '%s' "$out" | grep -qE "error:" && has_err=1
 

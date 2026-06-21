@@ -78,6 +78,10 @@ for dir in "$ROOT"/tests/*/; do
     # concurrency); under this serial suite those programs would block forever. Driven separately
     # by tests/run-parallel.sh (`make test-parallel`).
     [ "$stage" = "parallel" ] && continue
+    # The net stage needs the -DEMBER_NET libcurl build (std/http's curl externs); under this
+    # dependency-free suite those imports don't resolve. Driven separately by tests/run-net.sh
+    # (`make test-net`), whose header already documents net as kept OUT of this suite. (OFI-105)
+    [ "$stage" = "net" ] && continue
     # The native stage is a DIFFERENTIAL suite (VM vs compiled binary), not a golden
     # comparison — handled in its own block below.
     [ "$stage" = "native" ] && continue

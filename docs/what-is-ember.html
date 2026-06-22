@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What is Ember? The Ember programming language explained</title>
+  <meta name="description" content="Ember is a statically-typed systems programming language — memory-safe without a garbage collector, compiled to C by the emberc compiler. Not to be confused with Ember.js, the JavaScript framework.">
+  <link rel="canonical" href="https://www.ember-lang.org/what-is-ember">
+  <meta property="og:title" content="What is Ember? The Ember programming language explained">
+  <meta property="og:description" content="Ember is a statically-typed systems programming language, memory-safe without a GC, compiled to C by emberc. Not related to Ember.js.">
+  <meta property="og:url" content="https://www.ember-lang.org/what-is-ember">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#faf8f5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0c0a09" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='18' r='10' fill='%23ea580c' opacity='.9'/><circle cx='16' cy='14' r='6' fill='%23fb923c'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://www.ember-lang.org/#ember",
+        "name": "Ember",
+        "alternateName": ["Ember programming language", "Ember language", "Ember systems language"],
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux",
+        "description": "Ember is a statically-typed, brace-delimited systems programming language — memory-safe without a garbage collector, compiled to C by the emberc reference compiler. It is an unrelated, distinct project from Ember.js, the JavaScript web framework.",
+        "url": "https://www.ember-lang.org/",
+        "sameAs": ["https://github.com/kmcnally5/ember-lang"],
+        "license": "https://github.com/kmcnally5/ember-lang/blob/main/LICENSE",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Is Ember the same as Ember.js?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. Ember (the Ember programming language) is a statically-typed, compiled systems programming language whose reference compiler, emberc, compiles to C. Ember.js is an unrelated JavaScript web framework. The two projects share only a name — different language, different purpose, different authors."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is the Ember programming language?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Ember is a statically-typed, brace-delimited systems programming language in the lineage of C, C# and Rust. It is memory-safe without a garbage collector, fast to compile, and designed to be predictable for both humans and language models. The reference compiler, emberc, is written in C and compiles Ember to C."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is Ember used for?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Ember targets systems programming: software where memory layout, performance and predictability matter — tools, runtimes, libraries and, ultimately, an operating-system kernel written in Ember itself."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is Ember open source?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. Ember and its emberc compiler are open source under the MIT License, with no third-party dependencies in the default build."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
+  <style>
+    :root {
+      --bg: #faf8f5;
+      --surface: #ffffff;
+      --text: #1c1917;
+      --muted: #78716c;
+      --accent: #c2410c;
+      --accent-bright: #ea580c;
+      --accent-soft: #fff7ed;
+      --accent-glow: rgba(234, 88, 12, 0.14);
+      --border: #e7e5e4;
+      --code-bg: #f5f3f0;
+      --radius: 12px;
+      --content: 680px;
+      --wide: 920px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0c0a09;
+        --surface: #1c1917;
+        --text: #fafaf9;
+        --muted: #a8a29e;
+        --accent: #fb923c;
+        --accent-bright: #fdba74;
+        --accent-soft: #292524;
+        --accent-glow: rgba(251, 146, 60, 0.1);
+        --border: #292524;
+        --code-bg: #141110;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 70% 45% at 50% -15%, var(--accent-glow), transparent),
+        radial-gradient(ellipse 40% 30% at 100% 0%, var(--accent-glow), transparent);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .wrap { max-width: var(--content); margin: 0 auto; padding: 0 1.5rem; }
+    .wrap-wide { max-width: var(--wide); margin: 0 auto; padding: 0 1.5rem; }
+    .page { min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Header (shared with the homepage) */
+    header {
+      padding: 1.25rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: color-mix(in srgb, var(--bg) 85%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid transparent;
+    }
+    header.scrolled { border-bottom-color: var(--border); }
+    .header-inner { display: flex; align-items: center; justify-content: space-between; }
+    .logo {
+      display: flex; align-items: center; gap: 0.6rem;
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; font-weight: 500;
+    }
+    .logo-mark { width: 22px; height: 22px; flex-shrink: 0; }
+    nav { display: flex; align-items: center; gap: 1.5rem; font-size: 0.875rem; color: var(--muted); }
+    nav a:hover { color: var(--text); }
+    .nav-github {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.4rem 0.85rem; border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface); color: var(--text); font-weight: 500; transition: border-color 0.15s;
+    }
+    .nav-github:hover { border-color: var(--muted); }
+    .nav-github svg { width: 15px; height: 15px; }
+    @media (max-width: 560px) { nav a:not(.nav-github) { display: none; } }
+
+    main { flex: 1; }
+
+    .hero { padding: 3.5rem 0 1rem; }
+
+    .badge {
+      display: inline-block; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--accent); background: var(--accent-soft);
+      padding: 0.35rem 0.75rem; border-radius: 999px; margin-bottom: 1.5rem;
+    }
+
+    h1 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: clamp(2.5rem, 7.5vw, 3.75rem);
+      font-weight: 400; line-height: 1.08; letter-spacing: -0.025em;
+      margin-bottom: 1.25rem; max-width: 16ch;
+    }
+    h1 em { font-style: italic; color: var(--muted); }
+
+    .lead { font-size: 1.0625rem; color: var(--muted); max-width: 40rem; margin-bottom: 1rem; }
+    .lead strong { color: var(--text); font-weight: 600; }
+
+    .definition {
+      font-size: 1.0625rem; max-width: 40rem; margin: 1.5rem 0 0;
+      padding-left: 1rem; border-left: 2px solid var(--accent-bright);
+    }
+
+    .section { border-top: 1px solid var(--border); padding: 2.75rem 0; }
+    .section h2 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.5rem; font-weight: 400; margin-bottom: 0.75rem;
+    }
+    .section p { color: var(--muted); margin-bottom: 1rem; max-width: 40rem; }
+    .section p:last-child { margin-bottom: 0; }
+    .section strong { color: var(--text); font-weight: 600; }
+    code {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.875em;
+      background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 5px;
+    }
+
+    /* Disambiguation callout — the load-bearing "not Ember.js" block */
+    .callout {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-bright);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 1.5rem 1.75rem;
+    }
+    .callout h2 { margin-bottom: 0.5rem; }
+    .callout p { color: var(--text); }
+    .callout p + p { margin-top: 0.75rem; color: var(--muted); }
+
+    /* Facts table */
+    .facts { width: 100%; border-collapse: collapse; font-size: 0.9375rem; max-width: 40rem; }
+    .facts th, .facts td { text-align: left; padding: 0.7rem 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .facts th { color: var(--muted); font-weight: 500; width: 13rem; white-space: nowrap; }
+    .facts tr:last-child th, .facts tr:last-child td { border-bottom: none; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.5rem; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; font-weight: 500;
+      padding: 0.65rem 1.25rem; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--surface); transition: border-color 0.15s, transform 0.15s;
+    }
+    .btn:hover { border-color: var(--muted); transform: translateY(-1px); }
+    .btn-primary { background: var(--accent-bright); color: #fff; border-color: var(--accent-bright); }
+    .btn-primary:hover { border-color: var(--accent-bright); }
+
+    footer { border-top: 1px solid var(--border); padding: 2rem 0; margin-top: 1rem; }
+    .footer-inner {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 1rem; font-size: 0.8125rem; color: var(--muted);
+    }
+    footer a { text-decoration: underline; text-underline-offset: 2px; }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header id="header">
+      <div class="wrap-wide header-inner">
+        <a href="/" class="logo">
+          <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="19" r="11" fill="currentColor" opacity="0.15"/>
+            <circle cx="16" cy="17" r="7" fill="#ea580c"/>
+            <circle cx="16" cy="14" r="4" fill="#fb923c" opacity="0.85"/>
+          </svg>
+          ember
+        </a>
+        <nav>
+          <a href="/#features">Features</a>
+          <a href="/#install">Install</a>
+          <a href="/#docs">Docs</a>
+          <a href="https://github.com/kmcnally5/ember-lang" class="nav-github" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.18.82.63-.18 1.29-.27 1.96-.27.67 0 1.33.09 1.96.27 1.51-1.04 2.18-.82 2.18-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 16c4.42 0 8-3.58 8-8 0-4.42-3.58-8-8-8z"/></svg>
+            GitHub
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero wrap">
+        <span class="badge">What is Ember?</span>
+        <h1>The Ember programming&nbsp;language</h1>
+        <p class="lead">
+          <strong>Ember is a statically-typed, brace-delimited systems programming language.</strong>
+          It is memory-safe without a garbage collector, fast to compile, and designed to be
+          unusually predictable for both humans and language models.
+        </p>
+        <p class="definition">
+          The reference compiler, <code>emberc</code>, is written in C and compiles Ember to C —
+          giving it portability, zero install-time dependencies, and total control over memory layout.
+          Ember source files use the <code>.em</code> extension.
+        </p>
+      </section>
+
+      <section class="section wrap">
+        <h2>Ember in brief</h2>
+        <table class="facts">
+          <tr><th>What it is</th><td>A statically-typed <strong>systems programming language</strong></td></tr>
+          <tr><th>Style</th><td>Brace-delimited, in the lineage of C, C# and Rust</td></tr>
+          <tr><th>Compiler</th><td><code>emberc</code> — written in C, compiles Ember to C</td></tr>
+          <tr><th>Memory</th><td>Safe <strong>without a garbage collector</strong></td></tr>
+          <tr><th>Dependencies</th><td>None in the default build</td></tr>
+          <tr><th>License</th><td>MIT — open source</td></tr>
+          <tr><th>Status</th><td>Active development, pre-1.0</td></tr>
+          <tr><th>File extension</th><td><code>.em</code></td></tr>
+          <tr><th>Not to be confused with</th><td><strong>Ember.js</strong> — the JavaScript framework (unrelated)</td></tr>
+        </table>
+      </section>
+
+      <section class="section wrap">
+        <div class="callout">
+          <h2>Ember is not Ember.js</h2>
+          <p>
+            This is the <strong>Ember programming language</strong> — a compiled systems language.
+            It is a different and unrelated project from <strong>Ember.js</strong>, the JavaScript
+            web framework. They share only a name.
+          </p>
+          <p>
+            Ember.js runs in the browser to build web applications in JavaScript. The Ember language
+            described here is compiled ahead of time by <code>emberc</code> to native code via C, and
+            targets systems programming — not the web front-end. If you arrived looking for the
+            JavaScript framework, you want <em>Ember.js</em>; this is something else entirely.
+          </p>
+        </div>
+      </section>
+
+      <section class="section wrap">
+        <h2>Why Ember exists</h2>
+        <p>
+          Rust proved that a systems language can be memory-safe without a garbage collector. Ember
+          takes the same destination and shortens the road — with structured concurrency, no function
+          coloring, and verification built into the language itself. It is influenced by Rust, Zig, Go
+          and C, but bound by none of them.
+        </p>
+        <p>
+          A core goal is <strong>least surprise for language models</strong>: Ember is designed so that
+          an LLM can write correct Ember zero-shot, with a contracts-and-verification loop that catches
+          mistakes deterministically. The long-term objective is an operating-system kernel written in
+          Ember.
+        </p>
+      </section>
+
+      <section class="section wrap">
+        <h2>How Ember works</h2>
+        <p>
+          The <code>emberc</code> compiler runs a classic pipeline — lexer, parser, AST, type checker,
+          code generation — and is implemented in C for speed, portability and an empty dependency tree.
+          Ember can run on its bytecode VM or compile to C and on to a native binary, so the same program
+          is portable today and fast where it matters.
+        </p>
+      </section>
+
+      <section class="section wrap">
+        <h2>Get started with Ember</h2>
+        <p>Install the compiler, read the language reference, or browse the source.</p>
+        <div class="actions">
+          <a href="/#install" class="btn btn-primary">Install Ember</a>
+          <a href="/language" class="btn">Language reference</a>
+          <a href="https://github.com/kmcnally5/ember-lang" class="btn" target="_blank" rel="noopener">View source on GitHub</a>
+          <a href="/" class="btn">Home</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap-wide footer-inner">
+        <p>Ember is open source under the <a href="https://github.com/kmcnally5/ember-lang/blob/main/LICENSE">MIT License</a>.</p>
+        <p><a href="https://github.com/kmcnally5/ember-lang">github.com/kmcnally5/ember-lang</a></p>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const header = document.getElementById('header');
+    window.addEventListener('scroll', () => {
+      header.classList.toggle('scrolled', window.scrollY > 8);
+    }, { passive: true });
+  </script>
+</body>
+</html>

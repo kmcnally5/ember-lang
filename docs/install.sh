@@ -1,5 +1,5 @@
 #!/bin/sh
-# Ember installer — builds emberc + the standard library from source and installs
+# Ember installer - builds emberc + the standard library from source and installs
 # them under ~/.ember, then puts emberc on your PATH.
 #
 #   curl -fsSL https://ember-lang.org/install.sh | sh
@@ -102,7 +102,7 @@ detect_platform() {
 
 
 
-# emberc is C17 and builds with the Apple toolchain — clang + make from the Xcode
+# emberc is C17 and builds with the Apple toolchain - clang + make from the Xcode
 # Command Line Tools. There is no way to compile without them, so stop with the
 # one-line fix rather than failing deep inside make.
 ensure_toolchain() {
@@ -127,14 +127,14 @@ ensure_toolchain() {
 # them with Homebrew. Returns 0 if the full build can proceed, 1 to fall back to plain.
 ensure_full_deps() {
     if ! have brew; then
-        warn "Homebrew not found — needed for the flagship (graphics + networking) build."
+        warn "Homebrew not found - needed for the flagship (graphics + networking) build."
         warn "Install it from https://brew.sh and re-run for the full compiler."
         return 1
     fi
 
-    step "Installing build dependencies via Homebrew (pkg-config, raylib, freetype, curl)…"
+    step "Installing build dependencies via Homebrew (pkg-config, raylib, freetype, curl)..."
     brew install pkg-config raylib freetype curl >/dev/null 2>&1 || \
-        warn "brew reported an issue; checking whether the dependencies resolve anyway…"
+        warn "brew reported an issue; checking whether the dependencies resolve anyway..."
 
     # Homebrew's curl is keg-only (not on PATH by default), so expose its curl-config;
     # and make sure pkg-config can see Homebrew's .pc files regardless of how it was installed.
@@ -164,7 +164,7 @@ fetch_source() {
     WORKDIR=$(mktemp -d)
     trap cleanup EXIT INT TERM
     url="$EMBER_REPO/archive/$EMBER_REF.tar.gz"
-    info "Downloading source ($EMBER_REF)…"
+    info "Downloading source ($EMBER_REF)..."
     curl -fsSL "$url" -o "$WORKDIR/src.tar.gz" \
         || die "Download failed: $url"
     tar -xzf "$WORKDIR/src.tar.gz" -C "$WORKDIR" \
@@ -188,7 +188,7 @@ build_compiler() {
         target="release"; built="build/emberc-release"
     fi
 
-    info "Compiling emberc ($EMBER_PROFILE build — this can take a minute)…"
+    info "Compiling emberc ($EMBER_PROFILE build - this can take a minute)..."
     if ! ( cd "$SRCDIR" && make "$target" ) >"$BUILD_LOG" 2>&1; then
         err "Build failed. Last lines of $BUILD_LOG:"
         tail -n 30 "$BUILD_LOG" >&2
@@ -207,7 +207,7 @@ build_compiler() {
 # Install layout: $PREFIX/bin/emberc + $PREFIX/std/*.em. emberc resolves the stdlib as
 # <dir-of-binary>/../std, so this layout needs no environment variables to work.
 install_files() {
-    info "Installing to $EMBER_PREFIX…"
+    info "Installing to $EMBER_PREFIX..."
     mkdir -p "$EMBER_PREFIX/bin" "$EMBER_PREFIX/std"
 
     # rm-then-cp, never cp-in-place: macOS caches an ad-hoc code signature per inode,
@@ -265,7 +265,7 @@ verify_install() {
     if ! ver=$("$EMBER_PREFIX/bin/emberc" --version 2>/dev/null); then
         die "Installed emberc did not run. See $BUILD_LOG if the build looked off."
     fi
-    info "Installed ${BOLD}emberc${RST} — $ver"
+    info "Installed ${BOLD}emberc${RST} - $ver"
 }
 
 
@@ -283,7 +283,7 @@ print_next_steps() {
     printf '    emberc --emit=run hello.em        %s# compile and run on the VM%s\n' "$DIM" "$RST"
     printf '    emberc -o hello hello.em && ./hello %s# native binary%s\n' "$DIM" "$RST"
     if [ "$EMBER_PROFILE" = "full" ]; then
-        printf '    ANTHROPIC_API_KEY=sk-ant-… emberc --emit=run app.em   %s# the desktop app%s\n' "$DIM" "$RST"
+        printf '    ANTHROPIC_API_KEY=sk-ant-... emberc --emit=run app.em   %s# the desktop app%s\n' "$DIM" "$RST"
     fi
     printf '\nRun %semberc --doctor%s to health-check the toolchain, %semberc --help%s for usage.\n' \
         "$BOLD" "$RST" "$BOLD" "$RST"

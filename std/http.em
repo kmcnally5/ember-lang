@@ -24,6 +24,7 @@
 // give the module a clean, stutter-free API (http.post, not http.http_post).
 extern "c" {
     fn http_post(url: string, headers: string, body: string) -> string
+    fn http_get(url: string, headers: string) -> string
     fn http_open(url: string, headers: string, body: string) -> Ptr
     fn http_next(h: Ptr) -> string
     fn http_status(h: Ptr) -> i64
@@ -35,6 +36,15 @@ extern "c" {
 // is one string of header lines separated by "\n"; an empty body sends an empty POST.
 fn post(url: string, headers: string, body: string) -> string {
     return http_post(url, headers, body)
+}
+
+
+// get sends one blocking GET and returns the entire response body as a string. `headers` is one
+// string of header lines separated by "\n" (often "" for a simple probe). Short connect/total
+// timeouts mean a down or unreachable host returns quickly rather than hanging the caller — suited
+// to discovery calls like a local model list. A transfer failure comes back as `{"_curl_error":"…"}`.
+fn get(url: string, headers: string) -> string {
+    return http_get(url, headers)
 }
 
 

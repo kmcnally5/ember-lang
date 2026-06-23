@@ -771,7 +771,7 @@ manifesto on explicit cost). A user-defined `clone` method on a struct takes pre
 built-in. It is not offered on scalars (assignment already copies them), on immutable shared values
 (strings, enums — assignment already gives you a usable handle), or on a slice (use `arr.slice(0,
 arr.len())` to copy a view into an owned array). *(Native-backend note: value-struct `.clone()` is
-currently VM-only; array `.clone()` works on both backends — see [OFI.md](../OFI.md) OFI-082.)*
+currently VM-only; array `.clone()` works on both backends — see [OFI.md](OFI.md) OFI-082.)*
 
 **Storage — inline struct arrays (value types).** An array of an **all-scalar struct** (every
 field a scalar, total ≤ 255 bytes — e.g. `struct Pixel { r: u8  g: u8  b: u8 }`) packs its
@@ -1392,7 +1392,7 @@ visibility can gate; a method belongs to its *type*, which travels wherever the 
 is no qualifier to gate. (Two standard-library modules rely on this — `std/flare` builds on `std/ui`,
 reaching some of its `_`-prefixed methods across the module boundary.) This asymmetry is deliberate but acknowledged as a
 rough edge; a future module-system pass is expected to replace the `_` convention with explicit
-`pub`/visibility that is uniform for both. See [OFI.md](../OFI.md) OFI-081.
+`pub`/visibility that is uniform for both. See [OFI.md](OFI.md) OFI-081.
 
 Imported **types** are named qualified too — `mod.Point`, `mod.Shape<T>` — in any annotation
 (parameter, `let`, return, field, type argument), and **constructed qualified** with a struct
@@ -1666,7 +1666,7 @@ nothing a tracing collector would reclaim that this misses.
 
 **Deferred (sound — leak-until-exit, never a use-after-free):** values left **unreceived in an
 abandoned channel**. (A refcounted value flowing through a **generic** body is now released by the
-caller — the earlier erased-`T` over-retain was closed; see [OFI.md](../OFI.md) OFI-117.)
+caller — the earlier erased-`T` over-retain was closed; see [OFI.md](OFI.md) OFI-117.)
 
 ---
 

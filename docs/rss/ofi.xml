@@ -1,0 +1,1067 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Ember Language — OFI Log</title>
+    <link>https://www.ember-lang.org</link>
+    <description>Opportunities For Improvement — bugs, design flaws, and improvements tracked while building Ember.</description>
+    <language>en-gb</language>
+    <lastBuildDate>Tue, 23 Jun 2026 16:35:08 -0000</lastBuildDate>
+    <atom:link href="https://www.ember-lang.org/rss/ofi.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>[OPEN] OFI-138: The Flare Claude app SEGFAULTED on close under the M:N runtime (run-flare-mn.sh → emberc-mn-net-gfx)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-138</link>
+      <guid isPermaLink="false">ember-lang-ofi-138</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[APP-FIXED 2026-06-23 (flare_chat.em: draw.close() + tape_off() moved BEFORE the nursery join, so GL teardown runs on worker 0 while the main fiber is still pinned there — verified clean under MN+ASan for no-send AND after-request close). RUNTIME FIX STILL OPEN: the M:N scheduler should PIN the main/GL fiber to worker 0 (a worker-0-only ready slot the other workers never service), so ANY graphics/Cocoa-on-M:N program is sound, not just this app. Needed before M:N can host GUI work as the default.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-137: A COLD local model gives no specific feedback during load: the first Ollama send after launch (or af</title>
+      <link>https://www.ember-lang.org/OFI#ofi-137</link>
+      <guid isPermaLink="false">ember-lang-ofi-137</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (UX polish, low effort; found 2026-06-23 while debugging the Ollama MVP). While pending &amp;&amp; provider==Ollama &amp;&amp; no deltas yet, show a distinct &quot;Loading &lt;model&gt;…&quot; hint instead of the generic spinner (or surface first-token latency). Turns a confusing silent wait into a clear state.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-136: Local-model discovery (oll.list_models → GET /api/tags) runs SYNCHRONOUSLY on the render thread — at</title>
+      <link>https://www.ember-lang.org/OFI#ofi-136</link>
+      <guid isPermaLink="false">ember-lang-ofi-136</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (low priority; correct for the Ollama-only MVP shipped 2026-06-23). When remote providers land, move discovery onto a one-shot worker fiber (the streaming workers already prove the pattern) and show a brief &quot;discovering…&quot; state.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-135: The Claude desktop app's agentic tools (read_file/write_file) are advertised only on the Anthropic p</title>
+      <link>https://www.ember-lang.org/OFI#ofi-135</link>
+      <guid isPermaLink="false">ember-lang-ofi-135</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (deliberate MVP deferral; Ollama-only first pass shipped 2026-06-23). When the provider layer widens to OpenAI/OpenRouter/etc., add OpenAI-format tool mapping behind the existing send_turn seam, gated on the model's advertised capabilities (many local models can't do tools).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-134: The public `curl -fsSL https://ember-lang.org/install.sh \</title>
+      <link>https://www.ember-lang.org/OFI#ofi-134</link>
+      <guid isPermaLink="false">ember-lang-ofi-134</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[sh installer aborted at sh: line 210: EMBER_PREFIX?: unbound variable even though $EMBER_PREFIX is set unconditionally on line 26. Root cause: under a UTF-8 locale (reporter's LANG=C.UTF-8), bash 3.2 (macOS /bin/sh) mis-parses a $VAR IMMEDIATELY followed by a multibyte char — info &quot;Installing to $EMBER_PREFIX…&quot; let the first byte of the Unicode ellipsis … (E2 80 A6) be read INTO the variable name, so it looked up an unset EMBER_PREFIX‹E2› and tripped set -u (the stray byte renders as ?). Only line 210 had $VAR… adjacency; every other ellipsis followed a ) (source (main)…, take a minute)…), which terminates the name — so those printed fine, exactly matching the reporter's console output. The installer carried 11 non-ASCII chars (5 —, 6 …) purely for typography. | CLOSED 2026-06-23 (reported by Karl; root-caused on his machine by reproducing the exact curl\|sh under LC_ALL=C.UTF-8 with $EMBER_PREFIX SET → EMBER_PREFIX�: unbound variable, while plain C/POSIX and the file-fed /bin/sh install.sh path both printed clean). Made docs/install.sh pure ASCII (—→-, …→...): grep -P '[^\x00-\x7F]' now empty, sh -n clean, and a full piped install under C.UTF-8 to a temp prefix succeeds end-to-end. A curl\|sh` installer must be locale-independent ASCII. NOTE: ember-lang.org serves the COMMITTED copy, so the live fix needs a commit + push.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-133: Toasts had no INTERACTIVE affordance — a notification could not carry an action (the reversible-&quot;Und</title>
+      <link>https://www.ember-lang.org/OFI#ofi-133</link>
+      <guid isPermaLink="false">ember-lang-ofi-133</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. f.toast_action(text, label, token) renders an accent action button on the pill; a RELEASE over it fires token for one frame via f.take_action() and dismisses the toast (manual release-edge hit-test against the direct-drawn pill). Dogfooded as Undo-delete: deleting a conversation snapshots it (title+turns, .clone()d — Ember's linearity REFUSED the move-out of a field/loop-var, catching a real aliasing bug at compile time) and shows &quot;Conversation deleted · [Undo]&quot;; the token re-inserts + re-selects it. Regression flare_toast_action.em (press ≠ fire; release fires + dismisses); the no-action pill stayed byte-identical (graphics 43/0).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-132: Flare had no transient-notification primitive — action feedback (&quot;Copied&quot;, errors, confirmations) ha</title>
+      <link>https://www.ember-lang.org/OFI#ofi-132</link>
+      <guid isPermaLink="false">ember-lang-ofi-132</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23 (committed bb3073f). f.toast(text) enqueues; f.toast_layer() (called once per frame after finish()) draws + ages the queue as a fade+slide pill stack on the modal layer, auto-dismissing on a deterministic frame timer (~3.3s), built on presence(). Keeps the loop awake while a toast is alive so the timer advances under idle event-waiting (OFI-126). Dogfooded: code-block + message Copy → &quot;Copied to clipboard&quot;. Regression flare_toast.em.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-131: Flare had no opacity/compositing — a subtree could not fade as one, blocking a proper enter/exit (sl</title>
+      <link>https://www.ember-lang.org/OFI#ofi-131</link>
+      <guid isPermaLink="false">ember-lang-ofi-131</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23 (committed bb3073f). A fade multiplier (set_alpha builtin) captured per draw command and folded into final alpha at flush (one capture site, no per-op cost); f.fade_begin(amount)/fade_end() is a nesting paint bracket. No-op at the default — text/rect emit a tape alpha field only when &lt;255, so every un-faded golden is byte-identical. Dogfooded: the message enter is now fade+slide. Regression flare_fade.em.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-130: Flare elements SNAPPED in and out — additions popped, deletions teleported; no enter/exit motion (th</title>
+      <link>https://www.ember-lang.org/OFI#ofi-130</link>
+      <guid isPermaLink="false">ember-lang-ofi-130</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23 (committed bb3073f). f.presence(key, present) -&gt; float springs 0→1 on first sight (enter) and 1→0 when present flips false (exit, after which the caller drops the element), on the keyed-state surface so it survives list reorders; pairs with at/fade for fade+slide. Dogfooded on the chat composer/messages. Regression flare_presence.em.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-129: Flare rebuilt + re-laid-out the ENTIRE transcript every frame (O(total)), so a long chat dropped bel</title>
+      <link>https://www.ember-lang.org/OFI#ofi-129</link>
+      <guid isPermaLink="false">ember-lang-ofi-129</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23 — the standing answer to OFI-121. Immediate-mode list virtualization (Dear ImGui ListClipper, adapted): f.virtual_begin(key,count) / virtual_item(i) / virtual_end() build ONLY the rows whose extent falls in the scroll viewport + overscan; spacer struts of the skipped rows' summed height keep scroll-height + sticky-follow exact; per-row heights are LEARNED from last frame's solved rows (estimated until first seen — react-window's variable-height model). O(total) → O(visible): proven flat at ~1.5 ms/frame for 40 AND 400 turns. The app transcript virtualizes over visual BLOCKS (a tool_use folds its result into one item, so the window never aliases mid-pair). Regression flare_virtual.em. Research-grounded (pretext, react-window, ImGui).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-128: Spring/FLIP animation advanced a FIXED SPRING_DT once per FRAME, not per wall-second — so on heavy f</title>
+      <link>https://www.ember-lang.org/OFI#ofi-128</link>
+      <guid isPermaLink="false">ember-lang-ofi-128</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. frame_steps() builtin returns how many fixed 1/60s sub-steps the last frame's wall-time spanned (clamped 1..10); _spring/_flip_axis sub-step that many times → real-time catch-up regardless of fps. Opt-in via f.set_realtime(true) (the app enables it) so the DEFAULT stays the deterministic fixed timestep the golden suite depends on — all goldens byte-identical (the headless suite runs at steps==1).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-127: measure_text (raylib MeasureTextEx, which walks every glyph) was UNCACHED, so every label/button/wra</title>
+      <link>https://www.ember-lang.org/OFI#ofi-127</link>
+      <guid isPermaLink="false">ember-lang-ofi-127</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. A direct-mapped 16384-slot cache keyed by (text, font slot, size) in graphics.c (evict-on-collision; flushed on a DPI/backing-scale change). Pure memoisation → byte-identical widths, all goldens unchanged. Warm frames do ZERO FreeType measuring (111 calls → 0 freetype, 100% hit on stable content); only changed strings miss while typing/streaming. measure_misses() builtin + the EMBER_MEASURE_STATS instrument (per-frame ms-work + hit-rate). Regression flare_measure_cache.em.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-126: A static Flare app burned ~99% of a CPU core — the immediate-mode loop re-ran build+layout+paint 60×</title>
+      <link>https://www.ember-lang.org/OFI#ofi-126</link>
+      <guid isPermaLink="false">ember-lang-ofi-126</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. Adaptive idle gating on raylib 5.5 EnableEventWaiting/DisableEventWaiting (set_event_waiting builtin): the loop free-runs while there is input, an animation in flight (f.is_animating()), or a reply streaming (+ a short coast), otherwise EndDrawing blocks on the OS event queue — idle CPU ~99% → ~0%. had_input() builtin reports mouse move/wheel/resize PLUS a held-key sweep of the raw key queue so OS auto-repeat doesn't stutter (fixed a &quot;backspace deletes in bursts of three&quot; bug). Verified live (Activity Monitor) + flare_idle.em.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-123: The value model is width-erased: numeric widths are semantic-only (range/overflow/display take the o</title>
+      <link>https://www.ember-lang.org/OFI#ofi-123</link>
+      <guid isPermaLink="false">ember-lang-ofi-123</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Filed 2026-06-22 from an external language review (the "real widths" caveat — true for type-checking, not yet for layout).</em><br>
+<br>
+<strong>Gap.</strong> The explicit-width numeric family (<code>i8…i64</code>, <code>u8…u64</code>, <code>f32</code>/<code>f64</code>) is real for<br>
+type-checking — range, the overflow trap, ordering, and display each take the operand's width — but<br>
+every scalar value occupies the same runtime slot regardless of width (docs/language.md, "The whole<br>
+family runs" … "the value model is otherwise still width-erased"). Two visible consequences:<br>
+(a) a <code>u64</code> <strong>literal</strong> can be written only up to 2⁶³−1 — larger <code>u64</code> values are reached by<br>
+arithmetic or conversion (enforced in src/parser.c: integer literals parse through signed range →<br>
+"integer literal is out of range for i64"); (b) only packed scalar <strong>arrays</strong> store at their width<br>
+today (<code>[u8]</code> → 1 byte/element, a struct-of-<code>u8</code> packs), while a scalar <code>u8</code> local still takes a full<br>
+value slot.<br>
+<br>
+<strong>Why it exists (deliberate).</strong> Width-accurate native layout is a large piece of work; packed scalar<br>
+arrays + inline nested struct fields are explicitly "the first steps of native layout"<br>
+(docs/language.md). There is <strong>no correctness risk</strong> — range and overflow semantics are already<br>
+enforced on every operation, independent of storage width.<br>
+<br>
+<strong>Fix direction.</strong> Width-accurate scalar storage (store/load at the declared width; native struct and<br>
+local layout), plus a <code>u64</code> literal path that admits the full unsigned range. This is the credibility<br>
+piece behind the "real widths" systems-language claim, and a large, deliberate deferral rather than a<br>
+quick fix. Relates to the native-backend layout umbrella (OFI-051).]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-122: A Ptr may not be stored in a struct/array/enum/channel or used as a generic arg (the OFI-049 erasure</title>
+      <link>https://www.ember-lang.org/OFI#ofi-122</link>
+      <guid isPermaLink="false">ember-lang-ofi-122</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Filed 2026-06-22 from an external language review (the no-owning-wrapper consequence it flagged as the sharpest FFI gap).</em><br>
+<br>
+<strong>Gap.</strong> A <code>Ptr</code> may not be an array element, a struct field, an enum/variant field, a channel<br>
+element, or a generic type argument — the erasure-proof type-formation ban from OFI-049 (R1 in<br>
+docs/design/ptr-linearity.md; stated in docs/language.md, "Pointers, buffers, and opaque handles").<br>
+So <code>[Ptr]</code>, <code>Map<_,Ptr></code>, <code>Option<Ptr></code>/<code>Result<Ptr,E></code>, <code>Channel<Ptr></code>, and a <code>Ptr</code> struct field<br>
+are all unconstructable. The consequence the review named: you cannot build a value that <strong>owns</strong> a<br>
+C resource. No <code>struct File { handle: Ptr }</code>, no connection pool, no wrapper type, and no<br>
+<code>Option<Ptr></code> for a checked open — every C handle has to live as a bare local and be closed on every<br>
+path. For a language pitching real C bindings, this is the sharpest limitation.<br>
+<br>
+<strong>Already felt.</strong> docs/http-design.md records the concrete bite: a <code>Response</code> object "cannot simply<br>
+hold an open stream handle," so the streaming surface stays handle-passing (<code>open</code>/<code>next</code>/<code>close</code>)<br>
+until this is resolved.<br>
+<br>
+<strong>Why it exists (legitimate v1 choice).</strong> A <code>Ptr</code> has no Ember destructor — the compiler can't know<br>
+whether to call <code>fclose</code>/<code>free</code>/<code>sqlite3_close</code> — and the linear must-consume obligation can't be<br>
+discharged once it is hidden inside an aggregate under erasure. Banning storage was the sound, minimal<br>
+fix: it subsumes the "store-into-aggregate leak" with one rule the erasure can't slip past. The<br>
+checked-open idiom today uses the null sentinel (<code>fopen</code>→null, <code>fclose(NULL)</code> a guarded no-op), not<br>
+<code>Option<Ptr></code>.<br>
+<br>
+<strong>Fix direction.</strong> Typed handles with a user-declared destructor (<code>Drop</code>/close) — the<br>
+"typed-handles-with-<code>Drop</code> (future) will lift the ban" already noted in ptr-linearity.md R1. A handle<br>
+type that names its own close can be stored, RAII-dropped deterministically, and still keep<br>
+leak/double-close safety. Sequencing relates to OFI-099 (the linear obligation isn't minted through a<br>
+user <code>fn … -> Ptr</code> wrapper) and OFI-043 (adopt a C-owned buffer / transfer ownership). Priority: it is<br>
+the headline gap behind the "real C bindings" claim.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-121: Flare re-parses + rebuilds the ENTIRE node tree every frame: f.markdown calls md.parse(text) and re-</title>
+      <link>https://www.ember-lang.org/OFI#ofi-121</link>
+      <guid isPermaLink="false">ember-lang-ofi-121</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[LARGELY RESOLVED 2026-06-23 by OFI-129 (immediate-mode virtualization): the transcript now builds + lays out only the VISIBLE turns, so a long multi-turn chat is O(visible) not O(total) — the per-frame parse/layout tax is gone for the scrolled-transcript case that filed this. RESIDUAL (OPEN, narrow): a SINGLE turn taller than the viewport is one virtual item, so it still re-parses + re-lays-out in full while any part is on screen; the parse-memo lever (memoize parsed blocks per turn, keyed by text) would close that last case. Low priority — needs a genuinely giant single message to bite.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-120: The Flare paint loop emitted EVERY recorded leaf every frame, even ones scrolled far outside the vie</title>
+      <link>https://www.ember-lang.org/OFI#ofi-120</link>
+      <guid isPermaLink="false">ember-lang-ofi-120</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (raised by Karl: &quot;really slow dumping 3000 lines into a textbox&quot;; root-caused via the new EMBER_TAPE hook in the app — see [[ember-claude-app]]). Added viewport culling to finish() (std/flare.em): a scroll viewport (_SCROLL_BEGIN) records its screen-space bounds [vtop,vbot] and arms a cull flag; each leaf whose final [y,y+h] is fully outside the viewport is SKIPPED (no _paint, no rect record) — partially-visible rows still paint, so no clipping artifact. ~6132 → ~270 draws/frame on the reported case (~22×; the giant message's text ops 6023 → 161, ~37×). flare_fab/flare_sticky goldens re-blessed (now assert only the visible tail; the FAB shape — a high-layer leaf anchored on-screen — is preserved byte-identical) and double as the cull regression; graphics 36/0. Also wired EMBER_TAPE=/path into flare_chat.em (env-gated, one JSON line/frame, tail -f-able). Follow-up OFI-121 tracks the remaining per-frame re-parse cost.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-119: Every padded control in Flare (button/primary/ghost, nav_item, menu items, ghost label, tab chips, d</title>
+      <link>https://www.ember-lang.org/OFI#ofi-119</link>
+      <guid isPermaLink="false">ember-lang-ofi-119</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (Flare visual-polish campaign; raised by Karl from the live app). Added one shared helper Flare._ty(boxy, h, size) -&gt; boxy + (h - text_line_height(size)) / 2 (std/flare.em) and routed EVERY padded-control paint site through it (_paint_button, _paint_nav, _GHOST, _MENUITEM, the tab chip, dock title, drag ghost) so they all centre on the true line box and can't drift apart again. Inline/tight text (_LABEL/_MUTED/_HEADING/rich-text runs) deliberately untouched — line-box centring would push them out of their snug boxes. Verified with the tape: shapes byte-identical, text up exactly 2px, bar-height nav rows now off-by +0px (card centre 56 = line-box centre 56). 6 graphics goldens re-blessed (text-y only); graphics 36/0.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-116: A nav_item STOPPED ellipsizing its title while a popover/modal was open — every background nav row r</title>
+      <link>https://www.ember-lang.org/OFI#ofi-116</link>
+      <guid isPermaLink="false">ember-lang-ofi-116</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (raised by Karl from the live app). Split the gate in nav_item (std/flare.em): the w_last width read now happens for EVERY recorded rect, and only the ui.press (the click) stays behind the inert gate — so ellipsis survives an open popover while click fall-through is still suppressed. Reproduced + verified with a dogfood + EMBER_CAPTURE (long title overflowed the pill with the popover open → ellipsizes after). Regression tests/graphics/flare_nav_popover.em (taped settled frame asserts the trailing &quot;…&quot;); graphics 33/0.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-115: Atomic widgets (f.button/f.primary/f.ghost_button) STRETCH to full width when placed directly in a S</title>
+      <link>https://www.ember-lang.org/OFI#ofi-115</link>
+      <guid isPermaLink="false">ember-lang-ofi-115</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (filed 2026-06-22, Flare visual-polish campaign). Fix = give button/primary/ghost an intrinsic cross-axis size so flexbox stretch can't expand them. Deferred deliberately: the Claude app (flare_chat.em) leans on current stretch behaviour, so verify before/after with the new EMBER_CAPTURE instrument under net-graphics first. Worked around in examples by wrapping bare buttons in a row+spacer.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-114: The LIGHT theme was not at parity with dark: panel TITLE BARS were drawn as ui.shade(st.panel, 6), b</title>
+      <link>https://www.ember-lang.org/OFI#ofi-114</link>
+      <guid isPermaLink="false">ember-lang-ofi-114</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (Flare visual-polish campaign). Added an explicit per-theme bar surface token to ui.Style (a step lighter than panel on dark, a step darker on white), used at the dock title bar (std/flare.em:1019); retuned theme_light (stronger border d4cfc6, shadow α22→34, page bg nudged warmer so white panels lift). Verified with the new draw.capture/EMBER_CAPTURE instrument — the light dock now reads with dark's clarity, dark unchanged. Also added a gutter token (page-edge inset for top-level content, distinct from pad) wired to the root column. 30 graphics goldens re-blessed (gutter+border deltas only).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-113: A single-line f.label/f.text_muted/f.heading whose text exceeded its box drew the FULL string off-sc</title>
+      <link>https://www.ember-lang.org/OFI#ofi-113</link>
+      <guid isPermaLink="false">ember-lang-ofi-113</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (raised + fixed at Karl's request). _paint now ellipsizes to the SOLVED box width w at paint time — exact, no 1-frame lag (the layout clamps an oversized leaf to its container, confirmed via capture). Reused the existing kerning-correct _fit_text, generalised to _fit_text_sz(s, max_px, sz) so headings fit at their larger size; short text is untouched. Regression tests/graphics/flare_ellipsis.em (graphics 31/0).]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-111: Runtime Fault precision + repro follow-ups (docs/faults.md Phase 2/3): (a) where is line-only — the </title>
+      <link>https://www.ember-lang.org/OFI#ofi-111</link>
+      <guid isPermaLink="false">ember-lang-ofi-111</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (Phase 2/3, filed 2026-06-22). (a)+(b) are the literature's precision/values levers at full strength; (c) is a minor cosmetic wart; (d) is gated behind OFI-044 (string-FFI replay is unfaithful, so repro is premature for the apps that need it). Honest-cost order: value walker → columns/per-fn file → repro.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-110: Compile-side Fault convergence (docs/faults.md). Bring every failure class onto the one Fault schema</title>
+      <link>https://www.ember-lang.org/OFI#ofi-110</link>
+      <guid isPermaLink="false">ember-lang-ofi-110</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[PARTIALLY CLOSED 2026-06-22. (a) DONE — OP_CONTRACT_CHECK now renders via contract_fault (category=contract, code, call-stack route) on the unified channel; the synthesized message + contract_violation tape event are unchanged, so the --check classifier (string-matches the message) stays correct (verified: check stage green). (b) DONE — report_unhandled_error (src/main.c) detects an Err/None main returns unhandled via the prelude Result/Option identity recorded at codegen (CompiledProgram.result_enum_id/err_tag/…), renders an FCAT_UNHANDLED_ERR Fault with the error value + the OFI-108 route, and exits non-zero (was: exit 0 + =&gt; &lt;obj&gt;). Regressions tests/run/error_unhandled_err.em, tests/fault/unhandled_err.em. STILL OPEN: (c) compile-diagnostics→agent-Fault render + byte-spans + severity wiring — LOWER PRIORITY: --diagnostics=json already serves an LLM structured compile errors (file/line/col/message/near/help/note), and the compile Diag's near/note don't map cleanly onto the Fault's values/route, so the marginal gain is a unified agent flag, not a capability. (d) --check counterexamples → Fault (the tape already structures them).]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-109: Native-backend (AST→C) Fault parity: rich Faults are VM-only. A natively-compiled binary (emberc -o)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-109</link>
+      <guid isPermaLink="false">ember-lang-ofi-109</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (umbrella, filed 2026-06-22). Decide once: formally scope rich Faults to the VM and document native as &quot;bare em_panic message&quot;, OR thread line/values/ctx into em_panic + emit native debug-profile contracts; either way extend the differential harness to compare the stderr Fault render so native drift is caught. Exit-code split (VM 65 vs native 70) lives here too.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-108: The Fault route was only the synchronous CALL-STACK backtrace, useless for an Err reaching main (the</title>
+      <link>https://www.ember-lang.org/OFI#ofi-108</link>
+      <guid isPermaLink="false">ember-lang-ofi-108</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22. New release-elided OP_ROUTE_HOP emitted on the ? (EXPR_TRY) failure branch records (fn, line) into a bounded in-VM ring (vm-&gt;route_hops, cap FAULT_MAX_HOPS); the unhandled-Err-at-main Fault attaches it via vm_route(). KEY simplifications vs the workflow design: the hop stores only (fn,line) (the Err VALUE is shown once in the Fault's values, so NO value-snapshot → the use-after-free vector is moot), and the buffer is cleared at every CALL (a call can't occur while a ? chain unwinds, so it ends any prior handled chain) — replacing the fragile depth-reset heuristic, verified against a handled-then-propagate case (route correctly excludes the handled chain). VM-only (the in-VM ring sidesteps the parallel tape-sink fprintf race; native is OFI-109). opcheck ✓ (new opcode), ledger 300/300, crucible 187/187, ASan clean. Regression tests/fault/route_chain.em. The hop carrying the propagated value at each step is a deferred refinement (needs the OFI-111 value walker).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-107: src/trace.c's json_lines_on_event emitted every string field — the semantic-event detail (a contract</title>
+      <link>https://www.ember-lang.org/OFI#ofi-107</link>
+      <guid isPermaLink="false">ember-lang-ofi-107</guid>
+      <pubDate>Mon, 22 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-22 (Phase 0 of the Fault campaign) — extracted the one true JSON-string escaper into src/jsonw.c / include/jsonw.h (json_write_string: escapes &quot;, \, and every C0 byte) and routed BOTH the tape (trace.c, every string field) and the diagnostics JSON (diag.c, which had its OWN private put_json_string — now deleted) through it, so the two can never drift again. Regression tests/trace/string_escape.em (a value carrying &quot;, newline, tab, \ → valid escaped JSON, Python-parsed every line). make test 372/0; --diagnostics=json + existing tape goldens byte-identical.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-106: The native backend (src/cgen_c.c) emits the embedded StructType table as a POSITIONAL C initializer </title>
+      <link>https://www.ember-lang.org/OFI#ofi-106</link>
+      <guid isPermaLink="false">ember-lang-ofi-106</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. The emitted em_structs[] table now uses a DESIGNATED initializer per entry ({ .field_count = …, .total_size = …, .is_rc = …, .offset = …, .kind = …, .field_struct = … }, src/cgen_c.c) — a future StructType/StructLayout field can no longer silently misalign the table; an omitted field just zero-inits (.name is unused at runtime → NULL). A guard-comment warns against collapsing it back to positional. Verified: the emitted C is designated (confirmed on a value-struct array), compiles under -Werror, VM==native, full native suite 384/0.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-105: The dependency-free make test (tests/run.sh) FAILED tests/net/anthropic_harness.em: run.sh's stage l</title>
+      <link>https://www.ember-lang.org/OFI#ofi-105</link>
+      <guid isPermaLink="false">ember-lang-ofi-105</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — added [ &quot;$stage&quot; = &quot;net&quot; ] &amp;&amp; continue to tests/run.sh mirroring the graphics/parallel skips; net coverage is unchanged (driven by make test-net → tests/run-net.sh under build/emberc-net). make test is green again (365/0). Surfaced while regression-testing OFI-100..104.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-104: codegen.c leaks per-struct field_names arrays on the SUCCESS path. codegen_program's success exit do</title>
+      <link>https://www.ember-lang.org/OFI#ofi-104</link>
+      <guid isPermaLink="false">ember-lang-ofi-104</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — replaced the bare free(cg_structs) on the success path with free_cg_structs(cg_structs, total_structs) (src/codegen.c:2592), matching the error path. Reviewed solid: no double-free (each entry's field_names is independently malloc'd; all total_structs entries are initialised before either free site). A process-exit cleanup leak with no runtime growth — and since LSan is unsupported on this machine there is NO automated leak gate; verified by inspection + an ASan-clean manual run ([[ember-asan-available]]). The one knowingly-untested fix of the batch.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-103: std/string.repeat(s, n) infinite-loops for any negative n. The loop's only exit is if i == n { retur</title>
+      <link>https://www.ember-lang.org/OFI#ofi-103</link>
+      <guid isPermaLink="false">ember-lang-ofi-103</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — changed the loop guard to if i &gt;= n (std/string.em:56) so any n &lt;= 0 returns &quot;&quot; immediately. Regression tests/run/string_repeat.em (+ golden) covers n=3/0/-2; VM==native, both emit a=[ababab] b=[] c=[]. Reviewed solid — repeat was the only ==-against-a-user-supplied-bound loop guard in string.em (every other compares i against a non-negative .len()).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-102: The LSP server can be crashed/OOM'd by malformed editor input via TWO vectors: (1) lsp.c read_messag</title>
+      <link>https://www.ember-lang.org/OFI#ofi-102</link>
+      <guid isPermaLink="false">ember-lang-ofi-102</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — BOTH vectors closed: lsp.c read_message now rejects Content-Length &lt;0 or &gt;64 MiB and NULL-checks the malloc; json.c gained a Parser.depth field + JSON_MAX_DEPTH(1000), with parse_value split into a depth-guarded wrapper over parse_value_inner (the serve loop already treats parse→NULL as skip and read→NULL as EOF, so no NULL-deref). Regression in tests/run-lsp.sh (make test-lsp): an absurd Content-Length is rejected and a 100000-deep JSON message is capped — the server survives and keeps serving the next request. LSP/tooling-only (not the language).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-101: The contract prover's atom buffer can be overrun by a long ensures/requires clause. prove.c sizes th</title>
+      <link>https://www.ember-lang.org/OFI#ofi-101</link>
+      <guid isPermaLink="false">ember-lang-ofi-101</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — threaded a real cap parameter through add_atom/clause_to_constraints (src/prove.c); the requires site passes PROVE_MAX_CONSTR(128, req[] size), the ensures site PROVE_MAX_ATOMS(32, atoms[] size), so a &gt;32-conjunct clause is bounded (reported unproved) instead of overrunning the stack. Regression tests/prove/prove_long_clause.em (40 conjuncts → clean 'not proved (use --check)', no crash). Reviewed solid: the TOK_EQ double-add is safe at the boundary, and soundness is preserved (an over-long clause conservatively under-proves, never falsely proves).]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-100: The checker's unreachable dataflow flag LEAKS across function boundaries, silently disabling the lin</title>
+      <link>https://www.ember-lang.org/OFI#ofi-100</link>
+      <guid isPermaLink="false">ember-lang-ofi-100</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (toward v0.3.40) — reset c-&gt;unreachable = 0; at check_callable's per-function entry (src/check.c:6298, mirroring check_lambda:6101) and initialised it in check_program (:7673), so the diverging-return flag no longer bleeds across functions and skips the linear-Ptr leak scan. Regression tests/run/error_ptr_leak_after_return.em (a leaking-Ptr fn after a return-ending fn — compiled clean pre-fix, errors after) plus tools/ledger.sh extended to prepend a return-ending function to every reject seed, so the cross-function bleed is now fuzzed (make ledger 300/0). CONFIRMED via the committed git baseline after a skeptic FALSE-refuted it on a contaminated shared tree (the lesson: mutating verifiers need worktree isolation). Adversarial review flagged check_lambda as a sibling hole but it was DISPROVED — its body loop never calls stmt_diverges/raises unreachable, so a diverging lambda cannot poison the enclosing scan (verified in code + by a pre-fix binary). [[ember-ledger]]]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-099: The linear Ptr must-consume obligation is minted ONLY by a direct extern-call result, NOT by a USER </title>
+      <link>https://www.ember-lang.org/OFI#ofi-099</link>
+      <guid isPermaLink="false">ember-lang-ofi-099</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23 — found ALREADY FIXED on verification. Reproduced the exact case (fn opener() -&gt; Ptr { fopen(...) }; let p = opener() unclosed): the checker now correctly mints the must-consume obligation on a user fn → Ptr result and flags it 'opened but not closed' — verified for the named binding, the let _ = discard, AND that a properly-closed wrapper stays clean (not over-strict). The obligation evidently rides the declared-return-type path now; the OFI-095-era gap was closed incidentally by a later linearity change. Locked with regression tests/run/error_ptr_leak_wrapper.em (symmetric to error_ptr_discarded.em); run-suite 382/0. Lesson: the log was stale — verifying against the baseline beat trusting the filed claim.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-098: A binding named exactly _ is a discard only at FUNCTION-LOCAL scope: a module-scope let _ = 42, fn _</title>
+      <link>https://www.ember-lang.org/OFI#ofi-098</link>
+      <guid isPermaLink="false">ember-lang-ofi-098</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (surfaced by the OFI-095 review). docs/language.md frames the discard as a local binding; resolve fully by either making top-level _ a discard too, or documenting local-only explicitly. Low priority.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-097: LSP rename/find-references mis-targets a DUPLICATE bare _ on one source line: find_name_col (src/lsp</title>
+      <link>https://www.ember-lang.org/OFI#ofi-097</link>
+      <guid isPermaLink="false">ember-lang-ofi-097</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (surfaced by the OFI-095 review). Cosmetic: only ever mis-edits a meaningless write-only discard, never a real identifier (whole-word matching excludes _foo; renaming real vars on a shared line works). Fix: rename/prepareRename should REFUSE a bare _ (unnameable by design), or make find_name_col column-aware via the cursor anchor. LSP-only.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-096: The NATIVE backend (AST→C) leaks the result of a bare expression statement that yields an owned temp</title>
+      <link>https://www.ember-lang.org/OFI#ofi-096</link>
+      <guid isPermaLink="false">ember-lang-ofi-096</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-23. Native STMT_EXPR (src/cgen_c.c) now reads s-&gt;as.expr.release_temp and, when set, emits { Value _dis = (E); drop_value(&amp;g_em, _dis); } instead of (void)(E) — mirroring the VM's OP_RELEASE (codegen.c). No value-struct special-case was needed in the end: drop_value is the SAME call emit_drops already uses for every owned binding (it releases a value-struct's heap fields too), and release_temp is only set for genuine owning temps, so the two backends discharge identically. Verified three ways: the emitted C now drops the discarded mk(&quot;x&quot;); the native differential is VM==native (so the added drop is not a double-free — it would crash the binary); and an RSS probe (2,000,000 discarded strings → 1.4 MB RSS, flat — would be ~64 MB if leaking) confirms the silent leak is gone (native ASan/LSan still not wired). Regressions tests/run/discard_expr_drop.em (VM) + tests/native/discard_expr_drop.em (differential); full suite 384/0.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-095: let _ = expr — the discard idiom every mainstream language spells with a re-bindable wildcard — cann</title>
+      <link>https://www.ember-lang.org/OFI#ofi-095</link>
+      <guid isPermaLink="false">ember-lang-ofi-095</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (checker-only, 2 edits in src/check.c: declare_local exempts the EXACT name _ from the same-scope redeclaration check — still allocates a slot, so an owned value drops at scope exit and a discarded linear Ptr is still flagged; resolve_local returns -1 for exact _, making it write-only (reading _ → 'undefined variable'). Leading-underscore names (_foo/privacy, OFI-081) untouched via an exact name[1]=='\0' guard. Chosen over the heavier AST+parser+both-codegens rewrite the design workflow proposed, because today's let _ = E ALREADY drops owned values correctly and ALREADY errors on a discarded Ptr — only the redeclaration + readability were wrong; this smaller fix also corrects fn f(_, _) params and case Pair(_, _) for FREE (shared choke points). Designed via a 6-agent understand-map workflow; adversarially verified by a 6-agent review (ship-with-followups, 0 real defects) + Ledger 300/0/0 + Crucible clean + 362 golden suite + full LSP regression + VM==native byte-for-byte + ASan-clean. Boundary kept: let _ = unitCall() still errors (can't bind a no-value call — already documented). Regressions: discard_wildcard, error_discard_read, error_discard_ptr_leak, discard_ptr_close. Docs: language.md. Follow-ups filed: OFI-097/098/099.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-094: OFI-092 follow-ups (Karl, with a screenshot): the resized sidebar pills (a) TRUNCATED the title far </title>
+      <link>https://www.ember-lang.org/OFI#ofi-094</link>
+      <guid isPermaLink="false">ember-lang-ofi-094</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 ((a) two causes: title_for PRE-CAPPED the stored title at 24 chars (→ 80; each view ellipsizes its own way) AND nav_item truncated by a conservative CHAR budget; nav_item now ellipsizes to its real PIXEL width via _fit_text (binary-searched over substring measurements — kerning-correct, ~log n measures, the widget-level text-overflow: ellipsis) using LAST frame's painted width (1-frame lag like text_area's auto-grow), so long titles FILL the pill and scale with the splitter (220px→&quot;Explain a tricky c…&quot;, 480px→full); the app dropped its name_max hack. (b) a bare nav_item in the sidebar COLUMN grew grow=1 DOWNWARD → wrapped Settings in a row so it grows WIDTH, one row_h tall. Regression tests/graphics/flare_nav_ellipsis.em; graphics 26/0, flare_chat compiles. FOLLOW-UP (Karl: &quot;still not expanding on resize&quot;): the width fix worked but EXISTING conversations didn't visibly improve — the old store had baked the 24-char &quot;…&quot; INTO the persisted title string, so there was no hidden text to reveal. Fix = re-derive title_for(lt) from the loaded TURNS on load (the full first message is in turns), ignoring the stale stored title; the store self-heals on next save. Diagnosed by reading ~/.ember-claude-history.json, not guessing — 'Explain a tricky concept…' (stored) vs 'Explain a tricky concept simply' (turn[0]).)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-093: Flare had NO animation — every state change SNAPPED (panels popped in, list rows teleported on add/d</title>
+      <link>https://www.ember-lang.org/OFI#ofi-093</link>
+      <guid isPermaLink="false">ember-lang-ofi-093</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (spring physics + FLIP layout transitions on the keyed-state surface, over a FIXED timestep so animation is a pure function of FRAME COUNT — deterministic + golden-testable, no clock() nondeterminism in the render path; decision in docs/architecture.md). New: float-state column sf + state_float/set_float; f.spring(key,target)/spring_with (semi-implicit Euler over (pos,vel); snap-on-first-sight, retarget-for-free, rest-threshold settle); f.at(dx,dy)/end_at (a pure paint-queue offset bracket — finish() accumulates a 2-axis offset over a nesting stack, generalizing the scroll y-shift); f.animate_layout(key)/end_animate_layout (FLIP — springs the per-frame solved-position JUMP to zero at paint time off the EXISTING last-frame rect cache, never feeding back into the solve; the standout, nearly free because Flare re-solves flexbox every frame). Proven via the tape (a panel slides −290→10 tracking the spring; a pushed row eases 14→80 and settles, no teleport/drift). Regressions tests/graphics/flare_spring.em + flare_flip.em (exact deterministic curves), demo examples/graphics/18_flare_anim.em; graphics 25/0, no regression. docs/flare.md gained an Animation section.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-092: The sidebar conversation list did NOT resize with the splitter (OFI-085): each Recents entry was a c</title>
+      <link>https://www.ember-lang.org/OFI#ofi-092</link>
+      <guid isPermaLink="false">ember-lang-ofi-092</guid>
+      <pubDate>Sun, 21 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-21 (new f.nav_item(txt, active) -&gt; bool — a full-width sidebar row that GROWS (leaf(w,h,1)) to fill the panel width and paints LEFT-aligned (vs the centred _paint_button), accent fill when active; _NAVITEM/_NAVITEM_ON kinds + _paint_nav. flare_chat: sidebar panel START→STRETCH so the rows fill (heading wrapped in a row to stay left, since a bare heading centres under STRETCH), conversation rows use nav_item + the trailing ghost &quot;···&quot;, and the title ellipsis budget now SCALES with sbw. Proven via the UI tape: nav card width 153→313 as sbw 200→360 (tracks the delta), accent vs panel fill, left-aligned text, &quot;···&quot; pinned right. Regression tests/graphics/flare_nav_item.em; graphics 23/0. A genuinely reusable nav primitive the kit lacked — surfaced dogfooding the resizable sidebar.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-091: spawn rejected a MODULE-QUALIFIED callee — spawn mod.worker(args) failed the checker with &quot;'spawn' r</title>
+      <link>https://www.ember-lang.org/OFI#ofi-091</link>
+      <guid isPermaLink="false">ember-lang-ofi-091</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-20 (the spawn check now resolves a qualified callee mod.fn exactly as a qualified DIRECT call does — resolve_qualified_fn after the EXPR_GET / non-local-alias test — for the named-function + not-extern guards; check_expr then caches resolved_fn/witnesses on the node, which BOTH backends already read unchanged (verified: codegen.c spawn and cgen_c.c emit_spawn both key off resolved_fn, never the callee kind). A pure checker fix, ~12 lines, zero backend change. VM==native verified (got 42 on both). Regression tests/run/spawn_qualified.em (+ modlib/worker.em). Found + closed dogfooding the std/http extraction; decision logged in docs/architecture.md.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-090: No remove_at(i) — deleting an element from the middle of an array meant a hand-rolled rebuild loop (</title>
+      <link>https://www.ember-lang.org/OFI#ofi-090</link>
+      <guid isPermaLink="false">ember-lang-ofi-090</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-20 (new arr.remove_at(i) -&gt; T intrinsic: removes + returns element i, shifts the tail down O(n), bounds-checked, both backends. Wired the 8 sites with a SINGLE-SOURCED ARR_OP_* enum in ast.h (was magic 1/2/3/4 across check.c/codegen.c/cgen_c.c — the &quot;same number in 4 places&quot; trap). Tool: extended Crucible to fuzz array-mutation methods (op_array_remove_at/op_array_remove_last on value-struct arrays, 21/60 seeds hit it) → the whole class now rides the 5 oracles repeatably. Dogfooded: flare_chat per-chat delete = 15-line rebuild → one remove_at (no deep-clone-all). VM==native, ASan-clean, Crucible 120/120, opcheck clean. Regression tests/run/array_remove_at.em. Through-index receiver stays the OFI-072 error.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-089: Under M:N a GUI app's render loop (raylib/Cocoa) must run on the OS MAIN thread, but a fiber can run</title>
+      <link>https://www.ember-lang.org/OFI#ofi-089</link>
+      <guid isPermaLink="false">ember-lang-ofi-089</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[MITIGATED 2026-06-20 (vm_run runs the MAIN fiber DIRECTLY on the calling thread = worker 0, helpers handle spawned fibers — so the render loop, which never parks, stays on the main thread. Fixed the startup trace-trap when the Flare app ran on make mn-net-graphics.) Residual: if main PARKS then resumes (e.g. a final nursery join at window-close while a fetch is mid-flight) it could resume on a helper → an off-main-thread raylib call. Full fix = PIN main to worker 0 across park/resume (a dedicated worker-0 slot). Low urgency; the render-loop-in-nursery-body pattern never parks main mid-run.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-088: Under M:N a Fiber embeds a full Value stack[STACK_MAX] (~64KB) — fine for thousands of fibers, but 1</title>
+      <link>https://www.ember-lang.org/OFI#ofi-088</link>
+      <guid isPermaLink="false">ember-lang-ofi-088</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (perf/scaling; the headline &quot;100k cheap fibers&quot; tier needs right-sized or segmented/growable fiber stacks. Thousands work today. Filed by OFI-071.)]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-087: M:N ready-queue is ONE global mutex+condvar MPMC queue, not per-worker work-stealing deques</title>
+      <link>https://www.ember-lang.org/OFI#ofi-087</link>
+      <guid isPermaLink="false">ember-lang-ofi-087</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[OPEN (perf; correct + simplest-first per the measurement-first discipline — delivers &quot;thousands of cheap fibers&quot;. Work-stealing needs a distributed termination-detection algo to keep the no-false-negative deadlock guarantee. Measure before building. Filed by OFI-071.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-086: send on a CLOSED channel had no defined policy — serial/1:1 silently enqueued (if room) or parked fo</title>
+      <link>https://www.ember-lang.org/OFI#ofi-086</link>
+      <guid isPermaLink="false">ember-lang-ofi-086</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-20 (DECISION: send-on-closed is a runtime error on ALL three runtimes — &quot;send on a closed channel&quot; — like Go's panic and consistent with Ember's other programming-error traps (overflow, bounds). Added the ch-&gt;closed check to the serial + 1:1 OP_SEND arms and native em_channel_send; M:N already had it. Regression tests/run/error_send_closed.em.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-085: No resize/split control in the UI stack — panes were fixed-width (the Flare app's sidebar was a hard</title>
+      <link>https://www.ember-lang.org/OFI#ofi-085</link>
+      <guid isPermaLink="false">ember-lang-ofi-085</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened + closed 2026-06-20 (Karl: "we need a resize/split control adding to the language and then this should be added to the right hand side of the conversation history panel so this can be resized accordingly").</em><br>
+<br>
+<strong>Resolution.</strong> Added a first-class draggable splitter (both orientations): <code>std/ui._split_drag</code> (absolute-anchor latch — capture size + mouse-axis at press, <code>size = base + (axis − grab)·sign</code> clamped — with its own non-aliasing fields) + a tape-silent <code>set_cursor</code> builtin for the ↔/↕ pointer + <code>std/flare.splitter(key, size, lo, hi, vertical)</code>. Wired to the Claude app sidebar: <code>sbw</code> is a single persisted <code>state_int</code> (the duplicated <code>236</code> removed), window-aware max. Designed via a 3-spec judge panel + adversarial review (fixed a modal-gated-latch leak, a <code>w>=h</code> paint-orientation heuristic, a narrow-window overflow). Tests <code>tests/graphics/splitter.em</code> + <code>flare_splitter.em</code>; graphics 22/22. (Full write-up in git.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-084: Rendered code blocks (and all read-only text) were unselectable — a Copy button was the only way to </title>
+      <link>https://www.ember-lang.org/OFI#ofi-084</link>
+      <guid isPermaLink="false">ember-lang-ofi-084</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened + closed 2026-06-20 (Karl, dogfooding the Flare Claude app: "we have no way to select text in the code blocks … this is a must instead of just a copy button. All major languages support this select/copy (Ctrl+C) functionality").</em><br>
+<br>
+<strong>Resolution.</strong> Wired a read-only input layer onto rendered code blocks, reusing the existing field selection/clipboard machinery: <code>std/ui.code_caret_at</code> + <code>pressed_down</code> + <code>_code_input</code> (drag-select, Ctrl/Cmd+A, Ctrl/Cmd+C; no mutation), and <code>std/flare._code_block</code>/<code>_paint_code</code> (translucent per-line highlight behind the spans). The Claude app gets it free via <code>f.markdown</code>. Regression <code>tests/graphics/flare_code_select.em</code>; graphics 20/20. Deferred: whole-document continuous selection across prose+code. (Full write-up in git.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-083: .slice() on a VALUE-STRUCT array (convos[i].turns.slice(…)) corrupted memory — OP_SLICE_COPY/em_arra</title>
+      <link>https://www.ember-lang.org/OFI#ofi-083</link>
+      <guid isPermaLink="false">ember-lang-ofi-083</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-20 (dogfooding flare_chat's <code>Conv.turns: [Turn]</code> refactor — a non-empty store froze the app at startup; <code>.slice()</code> on a value-struct array reached through a struct field mis-sized the element copy, so the <code>memcpy</code> overran the buffer — the "hang" was that corruption). Original OPEN filing (symptom / minimal repro / boundary table / fix direction) condensed 2026-06-22; full detail in git history.</em>]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-074: The &quot;value moved inside a loop body&quot; guard rejected an UNCONDITIONAL consume(x); break — it checked </title>
+      <link>https://www.ember-lang.org/OFI#ofi-074</link>
+      <guid isPermaLink="false">ember-lang-ofi-074</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-20 (the guard now tracks moved-state at the actual LOOP BACK-EDGES — every continue plus a reachable fall-through — OR-accumulated, and reports only a move that reaches one. New Checker.loop_backedge_moved accumulator, the move dual of the loop_break_consumed Ptr pattern; applied to both loop and for. Sound: a move that maybe-breaks (recurs on the else path) or precedes a continue is still rejected. Ledger 300/300 (0 unsound, 0 over-strict). Regressions tests/run/loop_move_break.em (+for) and error_loop_move_recur.em.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-073: Enum variant names were globally unique across all enums — two co-imported modules couldn't both def</title>
+      <link>https://www.ember-lang.org/OFI#ofi-073</link>
+      <guid isPermaLink="false">ember-lang-ofi-073</guid>
+      <pubDate>Fri, 19 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-19 (full fix, BOTH backends, Crucible/ASan/dual-run verified). (1) Collision: the uniqueness check is now module-scoped to mirror resolve_variant's visibility — conflicts only within a module or against a prelude enum (so std/json's Str and std/highlight's Kind.Str coexist; redefining built-in Ok/Some is still caught). match was already scrutinee-directed. (2) Soundness: relaxing the check exposed that codegen resolved variants by GLOBAL name (resolve_cgvariant), so a same-named variant of the wrong enum/arity could be built — fixed by threading the checker-resolved (enum_id, variant_tag) onto the AST (Expr + Pattern) and having both backends build/dispatch from THAT, not a by-name lookup. (3) Stage 2: cross-module construction json.Obj([…]) now resolves (resolve_qualified_variant), so library enums need no builder boilerplate. Regressions: variant_cross_module (+native), variant_qualified_construct (+native).]]></description>
+    </item>
+    <item>
+      <title>[PARTIAL] OFI-072: arr[i].append(x) / arr[i].field.append(x) silently no-ops — a mut self method whose receiver is reac</title>
+      <link>https://www.ember-lang.org/OFI#ofi-072</link>
+      <guid isPermaLink="false">ember-lang-ofi-072</guid>
+      <pubDate>Fri, 19 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[*Opened 2026-06-19 (hit designing in-memory multi-conversation for <code>flare_chat.em</code>: an array of<br>
+<code>Conv</code> structs, each holding its own <code>[string]</code> transcript, mutated as <code>convos[active].msgs.append(...)</code>.<br>
+The appends compiled, ran without error, and <strong>left every conversation empty</strong>.)*<br>
+<br>
+Minimal repro (<code>/tmp/c.em</code>):<br>
+<br>
+<code>`</code>ember<br>
+fn main() -> int {<br>
+    var g: [[string]] = []<br>
+    g.append([])<br>
+    g[0].append("x")       // compiles, runs, NO error…<br>
+    g[0].append("y")<br>
+    print("{g[0].len()}")  // …prints 0, not 2<br>
+    return 0<br>
+}<br>
+<code>`</code><br>
+<br>
+The gradient that localises it:<br>
+- <strong>Works</strong> — <code>localStruct.field.append(x)</code> (receiver is a <em>local</em> place).<br>
+- <strong>Works</strong> — <code>arr[i].field = wholeArray</code> and <code>arr[i].scalar = v</code> (the <strong>assignment</strong> path resolves the<br>
+  nested place and stores back — this is what <code>std/layout.em</code> leans on: <code>self.nodes[i].rw = …</code>).<br>
+- <strong>Broken</strong> — <code>arr[i].append(x)</code> / <code>arr[i].field.append(x)</code> (a <code>mut self</code> <strong>method</strong> whose receiver is<br>
+  reached <em>through an index</em>). The indexed element is materialised into a temporary to serve as the<br>
+  receiver, <code>append</code> mutates the temporary, and the temporary is discarded — the stored element never<br>
+  changes. No diagnostic.<br>
+<br>
+This is the worst failure mode: it type-checks, runs, and <strong>silently loses data</strong> — squarely against the<br>
+manifesto's "no silent footguns" stance. The right long-term fix is to bind a <code>mut self</code> receiver to the<br>
+underlying <em>place</em> when the receiver expression is an lvalue (index/field chain), mutating through it the<br>
+same way the assignment path already does — i.e. unify method-receiver place resolution with assignment<br>
+LHS resolution in both backends. The acceptable interim is to make it a <strong>compile error</strong> ("cannot call a<br>
+mutating method on a value reached through an index — assign the whole element back instead"); a no-op must<br>
+not be a runtime outcome.<br>
+<br>
+<strong>Workaround (still valid)</strong> (<code>flare_chat.em</code> multi-conversation): the <em>checkout pattern</em> — keep the active<br>
+conversation in flat working arrays (<code>msgs</code>/<code>mine</code>, mutated freely as locals), and on every switch write<br>
+the whole arrays <strong>back</strong> through the index (<code>convos[active].msgs = msgs</code>, which DOES persist — assignment<br>
+path) before loading the target (<code>msgs = convos[active].msgs</code>). No mutation is ever done through an index.<br>
+<br>
+<strong>Resolution — <code>append</code> (2026-06-19).</strong> Fixed properly in BOTH backends as a read-modify-write that reuses<br>
+the proven assignment store path (the key insight: <code>gen_nested_store</code> / the native <code>em_index</code>+<code>em_set_field</code><br>
++<code>em_set_index</code> sequence already write a value back through an arbitrary index/field chain with balanced<br>
+refcounts). A <code>place.append(x)</code> whose <code>place</code> reads as a copy (<code>expr_reads_as_copy</code>: rooted at an <code>EXPR_INDEX</code>,<br>
+or an inline value-struct field, or a field of either) now lowers to: read the array out of the place →<br>
+<code>append</code> into that copy in place → write the whole array back into the place. A plain local/global receiver<br>
+shares the array handle and is left on the fast in-place path. Stack ops are refcount-neutral<br>
+(<code>OP_GET_LOCAL</code>/<code>OP_POP</code> don't retain/release); ownership balances through <code>OP_ARRAY_APPEND</code>'s move-in and<br>
+the store's release-old, exactly as in <code>arr[i].field = v</code>. <strong>Verified:</strong> the three failing shapes now<br>
+persist (<code>tests/run/array_index_mutate.em</code> + the <code>tests/native/</code> dual-run proving VM==binary); ASan+UBSan<br>
+clean on a 30-append stress over boxed-field structs, whole-field overwrite, and nested <code>[[T]]</code>; all<br>
+value-semantics/double-free regressions (<code>array_struct_inline</code>, <code>generic_nested_*</code>, the OFI-062/063/064<br>
+suite) still pass. <code>src/codegen.c</code> (<code>expr_reads_as_copy</code> + <code>gen_array_append_writeback</code>), <code>src/cgen_c.c</code><br>
+(<code>cgc_reads_as_copy</code> + <code>emit_array_append_writeback</code>).<br>
+<br>
+<strong>Still open — <code>remove_last</code> through a copy.</strong> Symmetric write-back for <code>remove_last</code> has a VM stack-ordering<br>
+wrinkle (it must keep the popped element as the result while writing the shrunk array back, and there is no<br>
+neutral drop-under opcode). Rather than fix one backend and diverge, <code>remove_last</code> on a copy-reading receiver<br>
+is now a <strong>compile error</strong> (<code>src/check.c</code> <code>recv_reads_as_copy</code>) — loud, never silent — telling the user to<br>
+bind the array to a variable, <code>remove_last</code> from that, and assign it back. The native append-writeback also<br>
+falls back to a compile error for the rarer inline value-struct-field chains it doesn't yet emit. Finishing<br>
+both (the <code>remove_last</code> RMW and the native inline-chain case) is the remaining slice of this OFI.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-071: Fibers are documented as &quot;cooperative M:N green threads&quot; but implemented 1:1 OS-thread-per-spawn</title>
+      <link>https://www.ember-lang.org/OFI#ofi-071</link>
+      <guid isPermaLink="false">ember-lang-ofi-071</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Karl (2026-06-20): "Is this not important? Should we not be sorting this out as priority? Make sure to use Crucible and write any other tools you need to make this a reality."</em><br>
+<br>
+<strong>Why it matters (honest).</strong> It does NOT speed up today's apps (the 1:1 thread-per-fiber build is already at the<br>
+~5–6× hardware ceiling). It matters because (1) founding principle #4 + the manifesto promise Go-goroutine<br>
+ergonomics — <em>thousands</em> of cheap tasks — which 1:1 pthread-per-<code>spawn</code> cannot deliver (100k spawns = 100k OS<br>
+threads); and (2) the OS-kernel endgame: a kernel has no pthreads — an M:N stackful/cooperative-fiber scheduler IS<br>
+a kernel scheduler, so this is the most kernel-relevant rung of the dogfood ladder.<br>
+<br>
+<strong>The unlock.</strong> No <code>ucontext</code>/asm. The VM bytecode interpreter is ALREADY the cooperative yield point — a channel<br>
+op that must block sets <code>block_channel</code> and <code>return VM_YIELD</code>, and the whole fiber state lives in its <code>Fiber</code><br>
+struct. So M:N = "run the existing cooperative scheduler on M worker threads sharing a ready-queue, parking fibers<br>
+on channels instead of blocking the OS thread." The thread-safe heap (atomic refcounts, per-context arenas,<br>
+cross-thread-free deferral) already existed from the 1:1 work.<br>
+<br>
+<strong>Design (hardened by a 5-agent adversarial workflow, then built + adversarially gated).</strong> New <code>EMBER_MN</code> flag<br>
+(implies <code>EMBER_PARALLEL</code>). A <code>Scheduler</code> (M=ncpu workers, the calling thread is worker 0) with ONE global<br>
+mutex+condvar MPMC ready-queue of <code>Fiber*</code>. Keystone decision: <strong>the arena lives IN the fiber</strong> (<code>EmberRt rt</code> moved<br>
+from VM→Fiber) so a migrated fiber keeps one <code>home</code> regardless of which worker runs it — closing the cross-worker<br>
+free leak <em>structurally</em>. <code>ObjChannel</code> condvars → intrusive fiber waiter FIFOs; a blocked op parks the fiber<br>
+(<code>fstate</code> CAS = the single arbiter so a channel-wake and a cancel-sweep can't double-enqueue) — observe+register+<br>
+commit under one <code>ch->lock</code> ⇒ lost-wakeup-free. Single global lock order <code>channel > nursery > readyqueue > heap</code><br>
+(proven acyclic). Nursery: <code>OP_SPAWN</code> pushes a fiber (no <code>pthread_create</code>); the parent parks at the closing brace<br>
+and the last child wakes it (<code>live</code> under <code>n->lock</code>, so the parent — never a child — frees the group, no UAF);<br>
+children freed at finalize so the cancel sweep can't touch freed memory. Structured cancellation: a child error<br>
+sets <code>n->cancel</code>, requeues parked siblings, they unwind at yield seams (channel ops + the OP_LOOP back-edge) via a<br>
+new <code>VM_CANCELLED</code>. Global deadlock = all workers idle + queue empty + a live fiber remains. VM-only (native stays<br>
+1:1; <code>runtime.c</code>'s native concurrency is <code>!EMBER_MN</code>).<br>
+<br>
+<strong>Verified.</strong> <code>make mn</code> builds clean; run-stage <strong>byte-identical to serial</strong> (238/239; the one diff is<br>
+<code>nursery_spawn</code>'s legitimately nondeterministic output interleaving). <code>make tsan-mn</code> <strong>clean</strong> (no scheduler data<br>
+races) and <code>make asan-mn</code> <strong>clean</strong> (no UAF/double-free) across the concurrent corpus incl. 5000-fiber. New<br>
+<strong><code>tools/mn-stress.sh</code></strong> (<code>make mn-stress</code>, Crucible's sibling) <strong>6/6</strong>: 8000 fibers in one nursery, fan-in/out<br>
+compute, nested nurseries, deadlock (exit 65, no hang), cancel-on-error (exit 65, no hang), pipeline+close. All<br>
+existing builds/suites unchanged (default 351/0, parallel 2/2, graphics 22/22).<br>
+<br>
+<strong>Gated</strong> behind <code>EMBER_MN</code> (Karl's call): the proven 1:1 stays the default <code>make parallel</code>; flip the default after<br>
+a wider soak + segmented fiber stacks (OFI-088). Filed OFI-086 (send-on-closed policy), OFI-087 (work-stealing),<br>
+OFI-088 (fiber stacks). Decision recorded in docs/architecture.md.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-070: A struct was capped at 32 methods (MAX_METHODS), a fixed array — std/flare's widget kit hit it</title>
+      <link>https://www.ember-lang.org/OFI#ofi-070</link>
+      <guid isPermaLink="false">ember-lang-ofi-070</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (StructInfo.methods made a grow_arena_vec dynamic vector like fields; cap removed, no silent wrap)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-069: Glyph atlas is ASCII-only — non-ASCII text (é, —, “” …) draws as ?</title>
+      <link>https://www.ember-lang.org/OFI#ofi-069</link>
+      <guid isPermaLink="false">ember-lang-ofi-069</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (on-demand per-code-point glyph cache: atlas seeds ASCII, grows lazily for any code point the face has; × ↑ … — · café now render — pixel-verified)]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-068: Graphics render goldens are pixel-exact, so a freetype version change shifts text metrics ±1px and f</title>
+      <link>https://www.ember-lang.org/OFI#ofi-068</link>
+      <guid isPermaLink="false">ember-lang-ofi-068</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-18 (surfaced installing raylib/freetype to finish the OFI-055 UI de-dup).</em><br>
+<br>
+<code>tests/graphics/*.em</code> assert the EXACT rendered draw-list (op + x/y/w/h…). Widget sizes that come from<br>
+<code>measure_text</code> (button widths, and every coordinate positioned relative to them) depend on the installed<br>
+<strong>freetype</strong>'s glyph advances, so a freetype version bump shifts them by ~1px and the golden fails — even<br>
+though the code is unchanged. Hit when freetype 26.6.20 was freshly installed here: <code>flare.em</code> went red<br>
+(<code>w:39</code>→<code>w:38</code>, <code>x:59</code>→<code>x:58</code>, …) while the other 10 cases passed (they don't measure text). Recalibrated<br>
+<code>flare.em</code> to this machine's freetype so the suite is 11/11, but the golden will drift again on the next<br>
+freetype upgrade. <strong>Fix (future):</strong> make the text-measuring goldens font-version-tolerant — round/bucket<br>
+text-derived coordinates, or assert structure (op sequence, text content) not exact pixels, or ship+pin a<br>
+bundled font so metrics are reproducible. <strong>Low priority</strong> — a test-infra fragility, not a language/runtime<br>
+bug; the affected case is <code>flare.em</code> only.<br>
+<br>
+<em>Update 2026-06-20 (second machine, building the Flare settings dialog).</em> The drift is **cross-machine, not<br>
+just cross-version<em>*: on a different Mac whose freetype reports the </em>same* libtool version (26.6.20), four<br>
+text-measuring goldens drift — <code>flare.em</code>, <code>text_field.em</code>, <code>unicode_text.em</code>, <code>wrap.em</code> (e.g. button <code>w:38</code>→<code>39</code>,<br>
+a <code>wrap.em</code> line break moving by one word) — so "the affected case is flare.em only" understated it. Equal<br>
+libtool version ≠ identical advances (different patch/build, libpng/harfbuzz, or raylib font path). I did <strong>not</strong><br>
+re-bless these (that would just trade Karl's calibration for mine); the new <code>tests/graphics/flare_modal.em</code><br>
+golden was blessed here and carries the same caveat in its header. This nudges the real fix up: metric-tolerant<br>
+comparison (bucket text-derived coords / assert op-sequence + text, not exact x) or a pinned bundled font. (<code>f32</code>, <code>i32</code>, <code>u8</code>, …) is unreachable<br>
+*Opened 2026-06-18 (surfaced while lifting the <code>func</code> ceiling: the <code>ceilings.sh</code> generator named functions<br>
+<code>f0..f299</code>, and <code>f32()</code>/<code>f64()</code> parsed as width conversions, not calls).*<br>
+<br>
+<strong>Symptom.</strong> Declaring <code>fn f32() -> int { … }</code> is accepted, but <strong>calling</strong> <code>f32()</code> is interpreted as the<br>
+<code>f32(x)</code> numeric width conversion (<code>is_numeric_typename</code> is consulted before user-function resolution in<br>
+<code>gen_expr</code>/the call checker), so it reports "a width conversion takes exactly one argument" and the user<br>
+function is unreachable. The same holds for <code>i8/i16/i32/i64/int/u8/u16/u32/u64/f32/f64</code>.<br>
+<br>
+<strong>Disposition.</strong> Inconsistency, low priority — these names are de-facto reserved for conversions, but the<br>
+declaration is silently accepted rather than rejected. Two clean options: (a) reject a function declaration<br>
+whose name is a width-type keyword (fail fast at <code>collect_signature</code>), or (b) let a same-name user function<br>
+shadow the conversion at the call site. (a) is simpler and matches "a clear error beats a surprise." Worked<br>
+around in the test tool by naming generated functions <code>fn_$i</code> (no type-name collisions). Not on any path.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-066: A user function named like a width type (f32/i32/…) is unreachable — the call parses as a width conv</title>
+      <link>https://www.ember-lang.org/OFI#ofi-066</link>
+      <guid isPermaLink="false">ember-lang-ofi-066</guid>
+      <pubDate>Fri, 19 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-19 (reserved the names: collect_signature rejects a FREE function whose name is a numeric_typename, with a clear message. Locals resolve before the conversion so let int = … is fine, and methods x.i32() use other syntax — both stay legal. tests/run/many_functions.em renamed its incidental f32/f64; regression error_fn_named_like_type.em.)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-065: net, net-graphics, test-parallel were real targets but missing from .PHONY</title>
+      <link>https://www.ember-lang.org/OFI#ofi-065</link>
+      <guid isPermaLink="false">ember-lang-ofi-065</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (added to .PHONY; found while documenting the Makefile in THE_EMBER_BOOK)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-064: Assigning a value-struct from a match case-binding to an OUTER variable double-frees (surviving OFI-</title>
+      <link>https://www.ember-lang.org/OFI#ofi-064</link>
+      <guid isPermaLink="false">ember-lang-ofi-064</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (clone-on-bind-out, BOTH backends; Crucible op + oracle-staleness fixed)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-063: Map&lt;K, [T]&gt; / arrays through erased generics double-free (arrays are unique-owner too)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-063</link>
+      <guid isPermaLink="false">ember-lang-ofi-063</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (unified deep-clone, BOTH backends)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-062: Value-structs through erased generics double-free (unique-owner vs refcounted-share)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-062</link>
+      <guid isPermaLink="false">ember-lang-ofi-062</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (unified deep-clone, BOTH backends)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-056: A function's constant pool index is one byte (max 256 constants/fn)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-056</link>
+      <guid isPermaLink="false">ember-lang-ofi-056</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (OP_CONST_LONG/OP_STRING_LONG; tools/ceilings.sh gates the whole narrow-operand class)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-055: Code-point string helpers duplicated + text_field lacked h-scroll</title>
+      <link>https://www.ember-lang.org/OFI#ofi-055</link>
+      <guid isPermaLink="false">ember-lang-ofi-055</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (cp_* in std/string UTF-8-verified by tools/string-diff.py; std/ui + gui.em migrated render-identical; text_field h-scroll ported + render-tested)]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-051: Native backend (AST→C) — M1–M5 complete; kept open as the umbrella for standing native limitations</title>
+      <link>https://www.ember-lang.org/OFI#ofi-051</link>
+      <guid isPermaLink="false">ember-lang-ofi-051</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-16 (while building the native backend — step 1 of the OS-capability ladder).</em><br>
+<em>Status 2026-06-17: M1–M5 complete; kept open as the umbrella for the standing by-design limitations.</em><br>
+<br>
+The native backend (<code>emberc --emit=c</code> / <code>emberc -o</code>, docs/architecture.md "Decision: a native backend<br>
+that lowers the AST to C") is <strong>M1–M5 COMPLETE</strong>: it compiles <strong>everything the VM accepts</strong> to a<br>
+standalone binary, validated against the VM by the <code>tests/native/</code> differential suite. Shipped across<br>
+the campaign: scalars + the full width-aware operator set; all aggregates (structs as real C value<br>
+types, enums + match, arrays, strings); erased generics + Option/Result + <code>?</code>; closures (lambdas,<br>
+captures, function values, generic HOFs); <code>dyn</code> interfaces; bounded generics → Map/Set; a full<br>
+drop-discipline pass (leak-free, RSS-verified); concurrency (spawn/nursery/typed channels on real<br>
+threads + the ported deadlock detector, conditional parallel build); and M5 — numeric conversions,<br>
+native builtins (libm math, file/stdin I/O, <code>args</code>/<code>env</code>/<code>exit</code>, <code>clock</code>, <code>len</code>, <code>assert</code>, wrapping<br>
+arith), string/array methods, and the <code>extern "c"</code> FFI. **Standing native limitations (by design, not<br>
+bugs):** contracts are not enforced in native output (verification stays a VM capability), and `make<br>
+install<code> doesn't yet ship the runtime headers, so </code>emberc -o<code> resolves </code>ember_rt.h` relative to the<br>
+build tree. <strong>Kept open as the umbrella; campaign at its planned terminus.</strong> The milestone record<br>
+follows (M2a … M5; residual edge cases are closed under OFI-054):<br>
+- <strong>M2a</strong> — DONE: the object runtime is extracted from <code>src/vm.c</code> into <code>src/runtime.c</code> behind an<br>
+  <code>EmberRt</code> context (object list + recycle pool + struct-layout table), shared by the VM (which embeds<br>
+  <code>EmberRt rt</code> and calls <code>&vm->rt</code>) and, ahead, by generated C. Packed marshalling<br>
+  (<code>value_box</code>/<code>value_unbox</code>/<code>array_box</code>/<code>elem_size_for</code>) is inline in <code>include/ember_rt.h</code>. Verified<br>
+  zero-behavior-change (serial + parallel suites green). <code>src/runtime.c</code> does not reference dispatch,<br>
+  the <code>CompiledProgram</code>, or verification state, so it links into a bare binary.<br>
+- <strong>M2b</strong> — STRUCTS DONE (construct + field read): the C emitter emits an <code>em_struct(...)</code><br>
+  constructor (declared-order field packing) and <code>em_get_field</code> / <code>em_get_field_owned</code> reads, plus a<br>
+  baked-in <code>StructType</code> table + a process-wide <code>EmberRt g_em</code> context and the <code>libember_rt.a</code> link<br>
+  (<code>build/libember_rt.a</code>, located next to <code>emberc</code>). Ownership for a field read is derived from the<br>
+  object's shape (a named binding borrows; a fresh temporary drops — the checker's <code>drop_object</code> is<br>
+  unreliable under the boxed model). Drop discipline emits <code>drop_value</code> at scope/return/block/loop-body<br>
+  exits. Covers scalar + nested (inline) structs, borrow-pass, return-by-move; differential-tested<br>
+  (tests/native/struct*.em). Representation is ALWAYS BOXED — multi-slot hints ignored.<br>
+- <strong>M2b</strong> — struct field ASSIGNMENT DONE: <code>o.f = v</code> via <code>em_set_field</code> (drops the old boxed field,<br>
+  mirrors OP_SET_FIELD); reassigning an owned <code>var</code> drops the previous value first. Nested inline-struct<br>
+  write-back (<code>line.a.x = v</code>) deferred. (Fixed a Makefile bug along the way: <code>RT_LIB</code> was defined after<br>
+  the <code>all</code> rule, so <code>$(RT_LIB)</code> expanded empty in its prerequisites and the runtime lib never rebuilt<br>
+  on a <code>runtime.c</code> change — now defined before <code>all</code>.)<br>
+- <strong>M2c</strong> — METHOD CALLS DONE: a struct method call <code>recv.m(args)</code> threads the receiver as self (arg 0)<br>
+  via the method's <code>field_index</code> slot; struct args pass by value; module-qualified <code>mod.foo</code> falls through<br>
+  to the direct path. Deferred: temporary receivers (<code>mk().m()</code>), and bound/dynamic/array-string intrinsic<br>
+  dispatch (generics/interfaces/arrays/strings).<br>
+- <strong>M2 STRUCTS — RESHAPED to real C structs (DONE).</strong> The boxed-<code>Value</code> representation double-freed on<br>
+  struct MOVES (<code>let q = p</code>, move-params: two aliases free one heap object). Fixed by lowering value-type<br>
+  structs to real C structs (<code>typedef struct { Value f0; … } em_s<sid>;</code>) — construction is a compound<br>
+  literal, fields are <code>.f<idx></code>, value semantics (moves/copies/nesting) come from C, no heap, no drop;<br>
+  <code>mut self</code> is passed by pointer. (Docs: architecture.md "Decision: value-type structs lower to real C<br>
+  structs".) "Copy structs" turned out MOOT — structs are NEVER <code>Copy</code> in Ember (only scalars/strings/<br>
+  enums/closures), so a struct copy is always a move. The 4 boxed struct helpers were removed.<br>
+- <strong>M2d — ENUMS + MATCH DONE.</strong> Enums are BOXED (heap, refcounted) in the C backend — unlike value<br>
+  structs — because the VM boxes them too, so the checker's move/drop/refcount flags ALIGN with the<br>
+  representation. Construction is <code>em_enum(ctx, enum_id, variant, n, …)</code> (zero-field <code>Red</code> and payload<br>
+  <code>Circle(2.0)</code>); <code>match</code> lowers to a C <code>switch</code> on <code>em_tag</code> with positional field bindings (borrows via<br>
+  <code>em_enum_field</code>), <code>case _</code> → <code>default</code>, <code>subject_drop</code> for a temp scrutinee. Refcounting is correct<br>
+  (<code>moves_local==2</code> → <code>OBJ_RETAIN</code> on a shared alias; consuming params release; verified by a 100k-iter<br>
+  match loop, no leak/double-free). First slice = <strong>non-generic</strong> enums with scalar/value payloads.<br>
+- <strong>M2e — ARRAYS DONE (scalar element).</strong> Arrays are BOXED heap MOVE types (like enums but unique-owner,<br>
+  not refcounted) — the checker's flags align with the boxed rep, and moves use the existing move-nil /<br>
+  drop machinery. Literal <code>[1,2,3]</code> → <code>em_array(ctx, n, elem_kind, …)</code>; <code>arr[i]</code> → <code>em_index</code> (bounds-<br>
+  checked); <code>arr[i] = v</code> → <code>em_set_index</code>; <code>arr.len()</code>/<code>arr.append(x)</code> → inline/runtime; <code>for x in arr</code><br>
+  → a C index loop binding each element as a borrow (a temp array literal/call result is dropped after).<br>
+  Drop frees the buffer + elements; verified by a 50k-array loop (no leak/double-free). Deferred: slices<br>
+  (<code>arr[lo..hi]</code>), <code>remove_last</code>/pop, arrays of structs/arrays (boxed/inline-struct elements), indexed<br>
+  <code>for (i, x)</code>.<br>
+- <strong>M2f — STRINGS DONE (boxed, refcounted, immutable).</strong> Literals → <code>em_str(ctx, bytes, len)</code><br>
+  (<code>make_string</code>-backed, interning deferred — value-equality is unaffected); concatenation <code>+</code> →<br>
+  <code>em_add(ctx, a, b, nk)</code> (string branch allocates a fresh result); interpolation <code>"x = {e}"</code> folds<br>
+  parts left with <code>em_add</code>, each hole rendered by <code>em_to_string(ctx, v, render_kind)</code> (<code>%lld</code>/<code>%llu</code>/<br>
+  <code>%g</code>); <code>==</code>/<code>!=</code> compare bytes (<code>em_value_eq</code> memcmp branch); <code>.len()</code> → inline byte length; <code>print</code>/<br>
+  <code>println</code> → <code>em_print</code>/<code>em_println</code>. **Drop discipline (the crux, learned here): neither <code>em_add</code> nor<br>
+  <code>em_print</code> consumes its operands** — the VM's <code>OP_ADD</code> and <code>print_value</code> only READ, never drop; a<br>
+  named/var operand is freed by the checker's scope drop and a literal/temp operand by the exit sweep<br>
+  (<code>rt_free_objects</code>), exactly as in the VM. My first cut had both helpers drop their operands, which<br>
+  double-freed a string param (<code>em_add</code> drops it, then the param's scope-exit drops it again → abort) and<br>
+  use-after-freed a reused binding (<code>println(msg)</code> freed <code>msg</code> before <code>msg.len()</code>). Differential-tested<br>
+  (tests/native/string.em + string_loop.em), incl. a 20k-iter concat/interpolation loop and an aliased<br>
+  binding (retain/release balance). **KNOWN GAP (shared with enum/array temp ARGUMENTS): owned temporary<br>
+  call arguments leak until the exit sweep** — the C backend doesn't yet implement the checker's<br>
+  <code>drop_mask</code>/<code>release_temp</code> so a per-iteration temp argument accumulates (bounded by iteration count,<br>
+  all reclaimed at exit; matches VM output but grows peak memory in a long-running loop). Implementing<br>
+  the call-site temp-drop discipline is the proper fix → a follow-on milestone. Deferred string methods:<br>
+  <code>.chars()</code>/<code>.bytes()</code>/<code>.split()</code>/<code>.char_count()</code>/<code>.parse_int()</code>. Also still deferred: generic enums<br>
+  (Option/Result → M3 generics), recursive / heap-payload enum variants, the <code>?</code> operator. <code>make install</code><br>
+  of headers + the <code>.a</code> still pending (emberc -o works from the build tree today).<br>
+- <strong>M3a — UNBOUNDED GENERICS + Option/Result + the <code>?</code> operator DONE.</strong> Generics are ERASED: a generic<br>
+  function lowers to exactly ONE C function over the uniform boxed <code>Value</code> — no per-type specialization,<br>
+  no monomorphization machinery ported. The emitter just stops rejecting generic functions/calls and<br>
+  routes every instantiation's call to that one base slot via the call's <code>resolved_fn</code> (the monomorphizer's<br>
+  appended instance slots are collapsed away — byte-identical bodies). Option/Result are the boxed enums<br>
+  the backend already builds (<code>em_enum</code>/<code>em_enum_field</code>/<code>em_tag</code>). The <code>?</code> operator (EXPR_TRY): a GCC/clang<br>
+  statement-expression that on the success variant MOVES the payload out (field 0, retained) and frees the<br>
+  shell, and on Err/None runs the function's owning-local drops and <code>return</code>s early (the early <code>return</code><br>
+  legally exits the enclosing C function from expression position; a <code>?</code>-bearing function always returns a<br>
+  boxed enum = <code>Value</code>). Differential-tested incl. 40k-iter stress of BOTH <code>?</code> paths over heap (string)<br>
+  payloads with owning locals (no leak/double-free). **GAP (clean-errored, not miscompiled): a generic<br>
+  instantiated over a value-type STRUCT** — the erased body is over boxed <code>Value</code> but a value struct is a<br>
+  real C <code>em_s<sid></code>, so the types collide; needs the struct↔box bridge (slice 3d). Guarded precisely:<br>
+  reject only when a value-struct flows into an erased <code>Value</code> type-parameter or return, not a concrete<br>
+  struct param. tests/native/generics.em.<br>
+- <strong>M3b — CLOSURES DONE (lambdas, captures, function values, higher-order calls).</strong> A closure is the boxed<br>
+  <code>ObjClosure</code> the VM uses (refcounted; rides the existing <code>Value</code> lane, so the checker's move/drop flags<br>
+  already align). New runtime: <code>em_closure(ctx, fn_index, capture_count, …)</code> (builds the ObjClosure,<br>
+  retains heap captures) and <code>rt_call_closure(ctx, clo, argc, args, invoke)</code> (lays out <code>[captures…, args…]</code><br>
+  and dispatches via a function-pointer <code>invoke</code>, retaining captures AND args — the erased-T runtime retain<br>
+  that keeps HOF calls sound). The emitter reads captures by NAME from the lifted function's leading params<br>
+  (the checker names them after the enclosing locals — no AST change needed), and generates a uniform<br>
+  <code>em_invoke(ctx, fn_index, slots)</code> trampoline: a <code>switch</code> over every all-<code>Value</code>-signature function (lifted<br>
+  lambdas + bare function values) calling the concrete <code>em_fn_<k>(slots[0]…)</code>. <code>em_invoke</code> is emitted<br>
+  non-static so a closure-free program (which never references it) doesn't trip <code>-Wunused-function</code>.<br>
+  Generic HOFs compose (3a+3b): <code>std/list</code> <code>map</code>/<code>filter</code>/<code>reduce</code> over arrays with lambdas run natively.<br>
+  Differential-tested incl. 20k-iter stress with heap captures, inline-lambda temporaries, and per-iteration<br>
+  lambdas (refcount-balanced, no crash). tests/native/closures.em. **GAP: a closure/function value with a<br>
+  value-struct in its signature** is not yet boxable (same struct↔box bridge as 3d); <code>em_invoke</code> only covers<br>
+  all-<code>Value</code> signatures.<br>
+- <strong>M3d — <code>dyn</code> INTERFACES DONE.</strong> A struct is UPCAST to an interface value (the checker's <code>coerce_witness</code><br>
+  on a value site, wrapped in <code>emit_expr</code>): box the receiver (<code>em_box_struct</code>) and bundle it with a vtable<br>
+  (an <code>em_enum</code> record of the impl's method fn-indices) via <code>alloc_interface</code>. A <code>dyn_method</code> call reads<br>
+  <code>vtable[slot]</code>'s fn-index and dispatches through a generated <code>em_invoke(ctx, fn_index, slots)</code> trampoline<br>
+  (one <code>switch</code> over every function, UNBOXING struct receivers/args via <code>em_unbox_struct</code> and BOXING struct<br>
+  returns). Heterogeneous <code>[Shape]</code> + per-element dispatch work; 20k-iter stress matches. tests/native/<br>
+  interfaces.em.<br>
+- <strong>M3c — BOUNDED GENERICS DONE.</strong> Witnesses are dictionary-passed: a bounded free function (<code>max<T: Ord></code>)<br>
+  takes them as hidden leading <code>Value w0..</code> parameters (<code>fn_witness_count</code>); a bounded generic STRUCT<br>
+  (<code>Map</code>/<code>Set</code>) stores them as trailing struct fields, appended at construction (<code>emit_struct_lit</code>). A bound<br>
+  method call reads the method fn-index from the witness (<code>w<n></code> or <code>self.f<n></code>) and dispatches via<br>
+  <code>rt_call_indirect</code> — a built-in key's Hash/Eq (index ≥ <code>WITNESS_NATIVE_BASE</code>) routes to a native shim<br>
+  (<code>em_hash_any</code> / <code>em_value_eq</code>), a user method to <code>em_invoke</code>. <code>max<Version></code>, <code>Set<int></code>/<code>Set<string></code>,<br>
+  and <code>Map<K,V></code> all run native (differential + 3000-round build/drop stress). tests/native/bounded.em +<br>
+  collections.em.<br>
+- <strong>THE VALUE-STRUCT↔BOXED BRIDGE (the shared core of M3c/M3d, also closing "arrays of structs").</strong> A flat<br>
+  value struct (<code>em_s<sid></code>, no nested-inline-struct field) is a contiguous <code>Value[]</code>; <code>em_box_struct</code> packs<br>
+  it to a heap <code>ObjStruct</code> (retaining heap fields) and <code>em_unbox_struct</code> reads it back. Applied at: interface<br>
+  upcast, generic-over-struct args/returns (<code>emit_generic_call</code> boxes a struct arg, unboxes a struct return —<br>
+  the erased <code>-> T</code> return sid resolved through <code>mono_args</code>, a struct SemType being its own sid), and struct<br>
+  payloads ENTERING boxed containers (<code>emit_value_arg</code> for enum/array construction + append) and LEAVING them<br>
+  (<code>emit_field_get</code> reads a boxed struct's field via <code>em_enum_field</code>). Generic struct INSTANCES alias to their<br>
+  BASE struct's C typedef (instance→<code>base_id</code>, flat only) so one erased method type-checks across instances —<br>
+  keeping distinct generics apart even when layouts coincide (Set and Map are both four Value fields).<br>
+- <strong>M3 KNOWN GAPS (clean errors / honest frontier, not miscompiles):</strong> generics/interfaces/containers over<br>
+  NON-FLAT structs (nested inline-struct fields) — the bridge assumes flat; <code>mut self</code> DYNAMIC/bound dispatch<br>
+  (em_invoke skips a mut-self pointer signature); a generic interface/method call form that isn't a direct<br>
+  free call. Still genuinely deferred: FFI + native builtins like <code>args()</code> (M5 — blocks<br>
+  examples/15_wordcount.em), most string/array methods, slices.<br>
+- <strong>M4 — CONCURRENCY DONE (spawn / nursery / typed channels on real OS threads).</strong> A spawned task runs<br>
+  <code>em_invoke(fn, args)</code> on its own pthread with a PRIVATE thread-local context (<code>_Thread_local g_em</code> —<br>
+  lock-free same-thread alloc; shared values are atomic-refcounted); a <code>nursery</code> collects spawns into a<br>
+  heap task list and <code>em_run_nursery</code> launches one thread per task and joins. Channels are the runtime's<br>
+  <code>ObjChannel</code> (pthread mutex + dual condvars): <code>em_channel_new/send/recv/close</code>, with recv building an<br>
+  <code>Option<T></code> (Some/None on closed+drained). The VM's per-nursery DEADLOCK DETECTOR is ported<br>
+  (<code>em_nursery_park</code> — a fully-blocked group prints once and <code>exit(70)</code>s rather than hanging). A finished<br>
+  worker merges its arena into a shared graveyard (<code>em_merge</code>, one lock per worker); cross-thread frees<br>
+  defer via <code>Obj.home</code>; main's exit sweep frees the graveyard. <strong>Conditional build:</strong> <code>emberc</code> detects<br>
+  concurrency (a spawn/nursery anywhere) and only then compiles the generated C with <code>-DEMBER_PARALLEL</code><br>
+  <code>-lpthread</code> against a parallel runtime variant (<code>libember_rt_par.a</code>) — serial native binaries keep their<br>
+  non-atomic, pthread-free representation. Verified: a 4-worker job pool (deterministic sum, 20/20 no<br>
+  races, differential-matched), a 10k-job pool (bounded RSS), strings handed off cross-thread (bounded RSS<br>
+  — merge + deferral sound), and the deadlock detector. tests/native/concurrency.em. **Fixed along the way<br>
+  (latent, pre-existing):** a <code>match</code> lowered to a C <code>switch</code>, so an Ember <code>break</code> in a case (the<br>
+  <code>loop { match recv(c) { case None { break } } }</code> channel-drain idiom) broke the <em>switch</em>, not the loop →<br>
+  infinite loop. <code>match</code> now lowers to an if/else-if chain. <strong>Deferred (clean error):</strong> spawn of a<br>
+  method/closure or a bounded-generic function; <code>05_concurrency.em</code> additionally needs string methods<br>
+  (<code>str.contains</code>).<br>
+- <strong>M5</strong> — FFI (<code>extern "c"</code>), and <code>print</code>/<code>println</code>/math/conversion builtins.<br>
+<br>
+Also: <strong>contracts (<code>requires</code>/<code>ensures</code>) are not enforced</strong> in native output (treated like a<br>
+<code>--release</code> build for now — verification stays a VM/debug capability, the determinism north star), and<br>
+<strong><code>make install</code> doesn't yet ship the runtime headers</strong>, so <code>emberc -o</code> finds <code>ember_rt.h</code>/<code>value.h</code><br>
+relative to the compiler's build tree (<code><bin>/../include</code>) rather than an installed location. These are<br>
+<strong>planned milestones / known gaps</strong>, not defects.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-050: Compiler symbol resolution is linear-scan</title>
+      <link>https://www.ember-lang.org/OFI#ofi-050</link>
+      <guid isPermaLink="false">ember-lang-ofi-050</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-16 (whole-codebase review, performance angle — measured, not a current bottleneck).</em><br>
+<br>
+The checker resolves names by scanning tables: <code>resolve_signature</code> strcmp-walks every function on<br>
+each call-site check, and <code>resolve_struct</code>/<code>resolve_enum</code>/<code>resolve_variant</code>/<code>resolve_method</code> do the<br>
+same per node; codegen's <code>mono_resolve</code> linearly scans the whole-program monomorphization table at<br>
+every generic call site. Asymptotically O(N·M) / O(G²) in functions × call sites. **Measured: not a<br>
+problem at current scale** — function/struct tables are capped at 256 (<code>MAX_FNS</code>/<code>MAX_STRUCTS</code>), and a<br>
+generated 250-function × 1000-call program type-checks+codegens in ~4 ms. <strong>Fix when it matters:</strong> build<br>
+a per-module name→index hash once after collection (the tables are frozen before bodies are checked),<br>
+turning each resolve into O(1); stamp the resolved instance onto the call <code>Expr</code> during planning so<br>
+codegen reads it directly. Cheaper companions, similarly deferred: json.c grows <code>items</code>/<code>keys</code>/<code>vals</code><br>
+by one element per <code>realloc</code> (O(K²) — give it amortized doubling like chunk.c), and the VM's hot<br>
+dispatch loop re-tests <code>tracer != NULL</code> every instruction (predictable branch; templating the loop<br>
+would remove it). <strong>Premature to do now</strong> — refactor risk with no measurable gain; revisit if compile<br>
+times grow.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-049: Ptr C handles have no lifetime tracking (double-close / leak)</title>
+      <link>https://www.ember-lang.org/OFI#ofi-049</link>
+      <guid isPermaLink="false">ember-lang-ofi-049</guid>
+      <pubDate>Fri, 19 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[FULLY CLOSED 2026-06-19 — Ptr is now a LINEAR type (move-only and must-consume): an owned handle un-closed on any path is a compile error. Checker-only (both backends); AND-merge consumed dual to moved, erasure-proof type-formation ban, reachability flag; new Ledger fuzzer + a reachability false-positive fix found by it]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-046: ? early-return doesn't check ensures postconditions</title>
+      <link>https://www.ember-lang.org/OFI#ofi-046</link>
+      <guid isPermaLink="false">ember-lang-ofi-046</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (park the propagated value in the result slot, then check ensures — no stack-depth tracker needed)]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-044: Replay doesn't capture C writes into a borrowed mut buffer</title>
+      <link>https://www.ember-lang.org/OFI#ofi-044</link>
+      <guid isPermaLink="false">ember-lang-ofi-044</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-15 (surfaced running <code>--emit=replay</code> on the new FFI showcase — examples/16_ffi.em).</em><br>
+<br>
+Deterministic record-replay (§5j) captures each foreign call's <strong>scalar result leaves</strong> and, on<br>
+replay, returns them while skipping the real C call (its effects don't recur). That is exactly right<br>
+for a value-returning call (<code>sin</code>, <code>strlen</code>) — but a C function that writes into a borrowed <code>mut</code><br>
+buffer (<code>fread</code>, <code>memcpy</code>-style) has a second output channel: the **bytes it wrote into the Ember<br>
+array**. Replay records the return count but not those bytes, and since it skips the real call the<br>
+buffer is never filled — so a program that reads a file into a <code>[u8]</code> and then <em>uses</em> the bytes<br>
+diverges on replay (<code>{"status":"diverged"}</code>). This is replay being <strong>sound</strong> — it surfaces that an<br>
+effect wasn't captured rather than silently producing a wrong "reproduced" run — but it means<br>
+buffer-reading FFI programs aren't replayable yet. Scalar/handle-only FFI replays fine (see<br>
+<code>tests/replay/ffi.em</code>, libm). <strong>Fix (future):</strong> in record mode, after a call with a <code>mut</code> buffer arg,<br>
+snapshot the buffer's post-call bytes into the nondet log; in replay, restore them after returning the<br>
+recorded result. The wrapper already knows which leaves are <code>'b'</code> buffers and <code>mut</code>, so the metadata<br>
+is in hand. <strong>Not urgent</strong> — it's a replay-coverage gap for one FFI shape, and it fails safe.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-043: FFI can't yet adopt a C-owned malloc'd [u8] buffer / transfer ownership (char* copy-on-return is don</title>
+      <link>https://www.ember-lang.org/OFI#ofi-043</link>
+      <guid isPermaLink="false">ember-lang-ofi-043</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-15 (deliberate scope cut while shipping the pointer/buffer FFI — §5h pointers).</em><br>
+<br>
+The pointer/buffer FFI lets C <em>receive</em> Ember heap values as borrowed pointers — a <code>string</code> as a<br>
+<code>const char*</code>, a packed <code>[u8]</code> as a buffer (<code>mut</code> if written), a <code>Ptr</code> as an opaque handle — and<br>
+that is enough to bind real C (libc file I/O, string functions; see <code>examples/16_ffi.em</code>). What it<br>
+does <strong>not</strong> yet handle is the other direction: a C function that <em>returns</em> memory it owns — a<br>
+<code>char*</code> from <code>strdup</code>/<code>getenv</code>-style APIs, or a freshly-<code>malloc</code>'d buffer. Ember would have to either<br>
+<strong>copy</strong> the bytes into a fresh <code>string</code>/array on return (and let C keep/free its copy) or <strong>adopt</strong><br>
+the pointer and free it later — both need an explicit ownership rule at the boundary, and getting it<br>
+wrong leaks or double-frees. The borrow model (Ember owns nothing C owns) was the sound, simple first<br>
+cut. <strong>Fix (future):</strong> annotate a returned <code>char*</code> as copy-on-return (the safe default — wrapper does<br>
+<code>strdup</code>-then-Ember-copy, C frees its own), with an opt-in "Ember adopts + frees" form for APIs that<br>
+transfer ownership. Until then, a C function that returns owned memory must be wrapped to write into a<br>
+caller-provided <code>mut [u8]</code> buffer instead (the <code>fread</code> pattern). <strong>Not urgent</strong> — the buffer-out<br>
+pattern covers most real APIs.<br>
+<br>
+<em>Update 2026-06-17 — copy-on-return for returned <code>char</em></code> is now IMPLEMENTED (the string half of this<br>
+OFI).<em> <code>CExternSig</code> grew a <code>ret_is_string</code> flag: when set, the wrapper returns a <code>malloc</code>'d <code>char</em></code>,<br>
+and the FFI marshalling (both <code>OP_CALL_C</code> in <code>src/vm.c</code> and <code>em_ffi</code> in <code>src/runtime.c</code>) copies it<br>
+into an owned Ember <code>string</code> and <code>free</code>s the C buffer — the safe copy-on-return default, no adopt. The<br>
+<code>http_post</code> libcurl wrapper (<code>src/cextern.c</code>, <code>#if EMBER_NET</code>) uses it to hand a whole HTTPS response<br>
+body back to Ember as a string; this is what powers <code>public/claude-desktop</code> (Ember ↔ Anthropic<br>
+API). <strong>Still open:</strong> (1) copy-on-return for a non-string <code>malloc</code>'d <em>buffer</em> (<code>[u8]</code>) — same mechanism,<br>
+needs a length channel since there's no NUL terminator; (2) the opt-in "Ember adopts + frees the raw<br>
+pointer" form for true ownership-transfer APIs. Kept Open for those two; the common <code>char*</code>-returning<br>
+case is done.]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-042: A move-type struct can't be a Map key</title>
+      <link>https://www.ember-lang.org/OFI#ofi-042</link>
+      <guid isPermaLink="false">ember-lang-ofi-042</guid>
+      <pubDate>Thu, 18 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[CLOSED 2026-06-18 (dropped the Copy key bound — struct keys deep-clone on store via existing runtime machinery; no Clone interface needed)]]></description>
+    </item>
+    <item>
+      <title>[CLOSED] OFI-020: Channel throughput is mutex-bound for tiny messages</title>
+      <link>https://www.ember-lang.org/OFI#ofi-020</link>
+      <guid isPermaLink="false">ember-lang-ofi-020</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-12 (parallel benchmark <code>pipe</code> section).</em><br>
+<br>
+The parallel channel ([include/value.h](include/value.h) <code>ObjChannel</code>, [src/vm.c](src/vm.c)<br>
+<code>OP_SEND</code>/<code>OP_RECV</code>) guards its circular buffer with one <code>pthread_mutex</code>. Every send and every<br>
+recv takes that lock, so a workload that pushes a huge number of <em>trivial</em> messages through one<br>
+channel is dominated by lock contention: the <code>pipe</code> benchmark (16 producers → 1 channel → 1<br>
+collector, <code>s.len()</code> per message) runs **~25–50× SLOWER under the parallel runtime than under<br>
+the serial cooperative one<strong>. </strong>Proven to be mutex contention, not wake-up strategy:** time<br>
+scales with the number of contending threads at fixed total work (1 producer 233ms → 16<br>
+producers 1409ms) and is <strong>insensitive to channel capacity</strong> (cap 16 → 8192 barely moves it),<br>
+which rules out sleep/wake cycles. <strong>PARTLY ADDRESSED 2026-06-13:</strong> (a) two-condvar split<br>
+(<code>not_empty</code>/<code>not_full</code> + targeted <code>signal</code>) — correct bounded-buffer design, helps multi-<br>
+<em>consumer</em> fan-out; (b) <strong>waiter-gated signalling</strong> — <code>recv_waiters</code>/<code>send_waiters</code> counts<br>
+(under the channel mutex) so a send/recv only fires a condvar signal when a peer is actually<br>
+parked. <strong>(b) is a real 2× win on uncontended/low-contention channel throughput</strong> (1-producer<br>
+pipe 233ms → 109ms — the consumer keeps up, so producers skip the needless wakeups) and helps<br>
+moderate contention (8 producers 729ms → 571ms). **Neither fixes the SATURATED many-producer<br>
+case<strong> (16 producers 1409ms → 1352ms): there the bare </strong>mutex acquisition** (every op locks,<br>
+17 threads contend) is the cost, and gating the signal can't remove it.<br>
+<br>
+<strong>Remaining fix = lock-free, and the honest ROI is poor — recommend NOT building it now.</strong><br>
+Only a lock-free MPMC ring (Vyukov bounded: per-cell sequence numbers, producers/consumers CAS<br>
+their own position counter; mutex+condvars retained only for the rare blocking-wait, so the<br>
+deadlock detector + serial path stay untouched) removes the producer contention. BUT measured<br>
+ceiling: even with ZERO contention a parallel channel op is ~9× serial's cost (1-producer<br>
+0.34µs/msg vs serial 0.084µs/msg) — that gap is <strong>cross-core cache coherence</strong> (each message's<br>
+cache line migrates producer-core → consumer-core), which no lock-free design removes. So<br>
+lock-free would take the 16-producer pipe ~1350ms → an estimated ~300ms (big relative win) but<br>
+it would <strong>still be slower than serial</strong> (27ms) for this tiny-message case, and a single<br>
+consumer is an inherent Amdahl bottleneck regardless. Against that: every REALISTIC pattern<br>
+already scales — compute/alloc/nested ~5–6×, and the same pipe with real per-message work hits<br>
+1.7× (200 iters) to 5.1× (1000 iters). <strong>Verdict:</strong> high risk (the hardest concurrency change)<br>
+for a pathological, non-idiomatic case that stays a loss; leave the Vyukov design recorded here<br>
+and revisit only if a genuinely channel-throughput-bound workload appears. See <code>make parbench</code>.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-018: Parallel cross-thread frees defer reclamation to program exit</title>
+      <link>https://www.ember-lang.org/OFI#ofi-018</link>
+      <guid isPermaLink="false">ember-lang-ofi-018</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-12 (M:N parallelism Stage 4 — per-worker pools).</em><br>
+<br>
+To make same-thread allocation lock-free, each worker VM owns a private object list +<br>
+recycling pool and an object is tagged with its <code>home</code> VM ([src/vm.c](src/vm.c) <code>reclaim</code>).<br>
+A same-thread free reclaims immediately (no lock); a <strong>cross-thread</strong> free — a heap value<br>
+moved to another worker through a channel and dropped there — cannot touch the allocating<br>
+worker's arena, so it is <strong>deferred</strong>: the dead object is left linked on its home list and<br>
+freed by the exit sweep when that worker merges its arena into the shared heap. This is<br>
+correct (freed exactly once, no double-free — <code>home</code> is compared for identity only, never<br>
+dereferenced) and the common case is fully lock-free, but channel-passed objects are **not<br>
+recycled mid-run**, so a long-running, channel-heavy parallel program shows bounded memory<br>
+growth until the nursery ends (then the worker merges and the next sweep reclaims). For<br>
+batch programs (the compiler's workload) this is a non-issue. (The 2026-06-13 channel-refcount fix<br>
+follows this same rule: a <code>Channel<T></code>'s <strong>home</strong> thread reclaims it immediately on the last drop,<br>
+while a non-home last release still defers to the exit sweep — the only residual channel deferral.)<br>
+**Fix (if a long-lived<br>
+channel-heavy workload ever needs it):** a lock-free remote-free queue — a cross-thread free<br>
+pushes the object onto its home arena's MPSC stack (atomic CAS), and the home worker drains<br>
+that stack into its pool at its next allocation. Deferred deliberately: the defer-to-exit<br>
+model removed the real bottleneck (alloc-heavy parallel went from 5.5× <em>slower</em> than serial<br>
+to 3.6× faster) at a fraction of the complexity and corruption risk of remote-free queues.]]></description>
+    </item>
+    <item>
+      <title>[OPEN] OFI-009: Ownership safety — checker done &amp; sound; Copy bound landed; only a deferred (sound) leak-until-exit </title>
+      <link>https://www.ember-lang.org/OFI#ofi-009</link>
+      <guid isPermaLink="false">ember-lang-ofi-009</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[<em>Opened 2026-06-10 (field-mutation slice); <strong>core landed</strong> 2026-06-10 (ownership slice).</em><br>
+<br>
+<strong>Largely resolved.</strong> A sound, function-local ownership analysis now runs:<br>
+- <strong>Move-tracking / use-after-move</strong> — heap aggregates (structs, generic struct instances) are<br>
+  <em>move</em> types; <code>let q = p</code>, a struct/variant field, a <code>move</code> argument, or a return transfers the<br>
+  value and marks the source moved; using a moved binding is an error. Scalars/strings/enums copy.<br>
+  Reassigning a <code>var</code> revives it.<br>
+- <strong>No aliased mutation</strong> — the move on <code>let q = p</code> closes the hazard that opened this OFI.<br>
+- <strong>No escaping borrows</strong> — returning a borrowed parameter is rejected (take it <code>move</code>).<br>
+- <strong>Borrow conflicts</strong> — the same value can't go to a <code>mut</code>/<code>move</code> parameter and be aliased by<br>
+  another argument in one call.<br>
+- <strong>Control flow</strong> — <code>if</code>/<code>match</code> arms merge move-state soundly (same value may move on different<br>
+  arms); moving inside a loop body is rejected; partial moves (a field out of a struct) are<br>
+  rejected. Implemented in [src/check.c](src/check.c) (<code>consume</code>, <code>is_move_type</code>, the<br>
+  snapshot/merge helpers, <code>Local.{owned,moved}</code>); verified by <code>tests/run/ownership_*</code> and the<br>
+  <code>error_<em>move</em></code>/<code>error_escape_borrow</code>/<code>error_borrow_conflict</code> cases.<br>
+<br>
+<strong>Remaining tail — RESCOPED 2026-06-10</strong> (the original framing over-stated the difficulty):<br>
+<br>
+1. <strong>Inferred return lifetimes — essentially MOOT for Ember, dropped as a goal.</strong> Lifetime<br>
+   inference only matters when a function can <em>return a borrow</em> (a reference into its input that<br>
+   the caller keeps using, e.g. Rust's <code>fn first(xs: &[T]) -> &T</code>). Ember has **no first-class<br>
+   references<em>* — no <code>&T</code> type, a borrow can't be stored or returned. </em>Every* return is by value:<br>
+   owned/constructed, or ownership <strong>transferred via explicit <code>move</code></strong>. And explicit <code>move</code> for<br>
+   transfer is exactly what MANIFESTO §5b mandates ("the dangerous direction must be typed<br>
+   explicitly"). So <code>fn max<T: Ord>(move a, move b) -> T</code> is the <em>correct</em> signature, not a<br>
+   missing-inference workaround — there is no return-borrow case to infer for. (Holds as long as<br>
+   Ember stays reference-free, which the LLM-first "no lifetime syntax" goal wants.) The "genuinely<br>
+   hard, research-grade" worry was misplaced.<br>
+<br>
+2. <strong>Generic-body ownership — the soundness hole is CLOSED 2026-06-13 (Stage 1).</strong> It was worse<br>
+   than "narrow": a type parameter was treated as <em>non-move</em>, so a generic body aliasing a <code>T</code><br>
+   value (<code>fn twice<T>(t){ let a=t; let b=t }</code>) double-owned and **double-freed a struct argument<br>
+   at runtime — a SIGTRAP, real memory unsafety**, exactly the class the checker exists to prevent.<br>
+   <strong>Fix:</strong> <code>is_move_type</code> now returns true for a type parameter, so generic bodies are ownership-<br>
+   checked (returning a borrowed <code>T</code> is an escape error — take it <code>move</code>); and <code>consume</code> now MOVES<br>
+   an <em>owned</em> type-parameter local instead of incref-sharing it (a struct can't be double-owned; a<br>
+   refcounted <code>T</code> transfers its one ref soundly) while a <em>borrowed</em> <code>T</code> and field/element reads keep<br>
+   the incref-share path (the <code>var acc = init</code> accumulator over a borrowed <code>U</code> needs it). A generic<br>
+   that returns its argument now takes it <code>move</code> — the stdlib HOFs were already linear and unaffected<br>
+   (<code>std/list</code>/<code>std/map</code> green); only 4 tests + the <code>identity</code>/<code>max</code> demos needed <code>move</code>/no-reuse.<br>
+   Regression test <code>tests/run/error_generic_use_after_move.em</code> (the old SIGTRAP is now a teacher-grade<br>
+   <code>use of 't' after it was moved</code>). 206 green, parallel 159, examples 7. **The <code>T: Copy</code> bound is now<br>
+   DONE** (MANIFESTO §5f): <code>fn identity<T: Copy>(x: T) -> T</code> may alias/return <code>T</code> by copy without <code>move</code>;<br>
+   <code>Copy</code> is a contextual marker (no keyword), composes (<code>T: Ord + Copy</code>), and a non-copyable argument for<br>
+   a <code>Copy</code> param is a clean error. Ember-native: <code>Copy</code> = everything except struct/array (shareables are<br>
+   immutable + refcounted → copy = a cheap incref). Wired in parser.c (<code>is_copy</code>), check.c (<code>is_copy_param</code>,<br>
+   call-site enforcement, move-exemption); tests <code>tests/run/generic_copy.em</code>, <code>struct_return_copy_param.em</code>,<br>
+   <code>error_copy_struct.em</code>. So the ownership tail is fully resolved.<br>
+<br>
+3. <strong>Deterministic drop/free</strong> — the "memory-safety <em>without a GC</em>" payoff. **In progress<br>
+   2026-06-10<strong> (now that concurrency makes long-running programs real). Landed: </strong>structs** are<br>
+   unique owners freed at scope exit (<code>OP_DROP</code>, recursive into struct fields, O(1) reclaim via a<br>
+   doubly-linked object list); <strong>conditional moves</strong> handled by nilling a slot when its struct is<br>
+   moved out, so a scope-exit drop is a no-op on the moved path (no static drop-flag pass needed);<br>
+   <strong>strings, arrays, and enums</strong> are shared and <strong>reference-counted</strong> (<code>OP_INCREF</code> on aliasing a<br>
+   live value, refcount dropped at scope exit / when a containing struct/array/enum is freed,<br>
+   recursively releasing elements and payloads). Values flow correctly <strong>through channels</strong> (<code>send</code><br>
+   records the channel's reference, <code>recv</code> transfers it to the receiver); <strong>unbound temporaries</strong><br>
+   are released (a <code>match</code> scrutinee like <code>recv(ch)</code> is dropped at match end via <code>OP_DROP</code> on the<br>
+   subject slot; a discarded expression-statement result via <code>OP_RELEASE</code>); and <strong>call arguments</strong><br>
+   are reclaimed by the callee — a refcounted parameter is released on return (the call site<br>
+   increfs an aliased argument and adopts a temporary; <code>Param.release_at_exit</code>), and a <code>move</code><br>
+   struct parameter is freed when the call returns. Since structs are unique and shareables are<br>
+   immutable, <strong>no reference cycles can form</strong>, so counting is complete. **Abandoned-channel<br>
+   reclamation is now CLOSED 2026-06-13** — <code>Channel<T></code> is a refcounted shareable type, reclaimed at<br>
+   the last drop instead of leaking to the exit sweep (see docs/architecture.md "Channel<T> is a<br>
+   refcounted shareable type"). <em>Deferred (sound — leak-until-exit):</em> only refcounted values flowing<br>
+   through a <strong>generic</strong> body (erased <code>T</code>, so the callee can't release — tied to the generic-ownership<br>
+   gap above). The discipline is **mutable aggregates = unique ownership; immutable shareables =<br>
+   refcount.** See [docs/language.md] "Memory model".<br>
+<br>
+Net: the ownership <em>checker</em> is done and sound; deterministic GC-free reclamation now covers<br>
+structs, strings, arrays, enums, channel-borne values (including a channel's own refcounted<br>
+reclamation at the last drop), discarded temporaries, and call arguments — the only remaining leak<br>
+is the (sound, leak-until-exit) generic-body case.<br>
+<br>
+<br>
+## Closed]]></description>
+    </item>
+  </channel>
+</rss>

@@ -10,7 +10,7 @@ compiler); this is where the compiler half lives.
 
 It is a **living** document, not an append-only log: each entry states the rule that is true
 **now** and why. For the dated history of what changed and the bugs/flaws found along the way,
-see [OFI.md](../OFI.md).
+see [OFI.md](OFI.md).
 
 Format: each decision is `## Decision: <short name>` followed by the rule and the reasoning. When
 a decision traces to a manifesto section or closes an OFI, it says so.

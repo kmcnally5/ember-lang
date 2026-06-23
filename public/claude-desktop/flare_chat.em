@@ -21,6 +21,7 @@ import "std/draw" as draw
 import "std/flare" as flare
 import "std/json" as json
 import "anthropic" as api
+import "ollama" as oll
 
 // Keyboard shortcuts (raylib keycodes): ⌘/Ctrl with +/- to zoom, N for a new chat.
 let KEY_SUPER_L = 343
@@ -225,6 +226,37 @@ fn chosen_model(model_idx: int, use_env: bool, env_model: string) -> string {
         return env_model
     }
     return model_id(model_idx)
+}
+
+
+
+
+
+
+// provider_label names the active backend for the Inspector and toolbar: the hosted Anthropic API, or
+// a model running locally under Ollama. The Ollama path needs no API key and never leaves the machine.
+fn provider_label(provider: int) -> string {
+    if provider == 1 {
+        return "Ollama (local)"
+    }
+    return "Claude (API)"
+}
+
+
+
+
+
+
+// send_turn dispatches one request to the ACTIVE provider's worker: Claude gets the Anthropic Messages
+// body (with the app's tool catalogue) on its channel; Ollama gets the OpenAI-compatible chat body (no
+// tools in this MVP) on its own channel. Centralised so the first send, the agentic re-send after a
+// tool result, and Retry can never drift in how they build or route a request.
+fn send_turn(provider: int, anth_ch: Channel<string>, oll_ch: Channel<string>, anth_model: string, ollama_model: string, max_tokens: int, sys: string, turns: [api.Turn]) {
+    if provider == 1 {
+        send(oll_ch, oll.build_request(ollama_model, max_tokens, sys, turns, true))
+    } else {
+        send(anth_ch, api.build_request(anth_model, max_tokens, sys, tool_defs(), turns))
+    }
 }
 
 
@@ -444,7 +476,7 @@ fn turn_json(role: int, text: string, kind: int, tid: string, tname: string, tin
 // The ACTIVE conversation's live transcript lives in the working `turns` array (not yet written back into
 // convos[active]), so it is serialized from that; the rest from their Conv. Paired with the startup load,
 // the convos are the nested-aggregate round-trip test: `[Conv]` (structs of `[api.Turn]`) → JSON → fresh structs.
-fn save_store(convos: [Conv], active: int, turns: [api.Turn], model_idx: int, tok_idx: int, dark: bool, zoom: int, system: string, dock: flare.DockTree) {
+fn save_store(convos: [Conv], active: int, turns: [api.Turn], model_idx: int, tok_idx: int, dark: bool, zoom: int, system: string, dock: flare.DockTree, provider: int, ollama_model: string) {
     var cjs: [json.Json] = []
     var i = 0
     loop {
@@ -482,13 +514,15 @@ fn save_store(convos: [Conv], active: int, turns: [api.Turn], model_idx: int, to
         i = i + 1
     }
     let root = json.obj([
-        json.member("v", json.num(4)),         // v4: + system prompt + dock workspace layout (loaded by field presence)
+        json.member("v", json.num(5)),         // v5: + provider + ollama_model (loaded by field presence)
         json.member("active", json.num(active)),
         json.member("model", json.num(model_idx)),
         json.member("toks", json.num(tok_idx)),
         json.member("dark", json.boolean(dark)),
         json.member("zoom", json.num(zoom)),
         json.member("system", json.str(system)),
+        json.member("provider", json.num(provider)),    // v5: selected backend (0 Claude · 1 Ollama)
+        json.member("ollama_model", json.str(ollama_model)),
         json.member("dock", dock.to_json()),            // OFI-112: persist the docked workspace layout
         json.member("convos", json.arr(cjs))
     ])
@@ -549,6 +583,15 @@ fn main() -> int {
     var use_env = env_model.len() > 0
     let api_key = env("ANTHROPIC_API_KEY")
     let ready = api_key.len() > 0
+
+    // Provider selection (the Ollama-only MVP beyond Claude): 0 = Claude (Anthropic API) · 1 = Ollama
+    // (a model running locally). The chat-capable model list is DISCOVERED from the running Ollama
+    // daemon (/api/tags) at launch / on switch / on refresh — only the chosen model id is persisted,
+    // never the list. A local model needs no API key, so readiness is "a model is selected", not a key.
+    var provider = 0
+    let ollama_base = oll.default_base()     // honours $OLLAMA_HOST; the Ollama worker is spawned against this
+    var ollama_models: [string] = []
+    var ollama_model = ""
 
     let suggestions = [
         "Explain a tricky concept simply",
@@ -640,6 +683,12 @@ fn main() -> int {
                 if !json.is_null(json.get(root, "system")) {   // system prompt (absent in pre-v4 files → stays "")
                     sys_prompt = json.as_str(json.get(root, "system"))
                 }
+                if !json.is_null(json.get(root, "provider")) {   // v5: the selected backend (pre-v5 → Claude)
+                    provider = json.as_int(json.get(root, "provider"))
+                }
+                if !json.is_null(json.get(root, "ollama_model")) {
+                    ollama_model = json.as_str(json.get(root, "ollama_model"))
+                }
                 let dockj = json.get(root, "dock")             // OFI-112: restore the saved workspace layout…
                 if !json.is_null(dockj) {
                     let saved_dock = flare.dock_from_json(dockj)
@@ -670,12 +719,22 @@ fn main() -> int {
     if zoom < 60 || zoom > 220 {
         zoom = 80
     }
+    if provider != 0 && provider != 1 {       // guard a corrupt/old store
+        provider = 0
+    }
     if dark {                                 // apply the restored theme + text size
         f.use_dark()
     } else {
         f.use_light()
     }
     f.set_zoom(zoom)
+
+    if provider == 1 {                        // discover local models up front so the picker + send are ready
+        ollama_models = oll.list_models(ollama_base)
+        if ollama_model.len() == 0 && ollama_models.len() > 0 {
+            ollama_model = ollama_models[0]
+        }
+    }
 
     // The ACTIVE conversation's transcript, copied OUT into the flat working array (mutated freely).
     var turns: [api.Turn] = convos[active].turns.clone()   // deep-copy out so the stored conversation array isn't aliased by the mutable working copy
@@ -700,10 +759,12 @@ fn main() -> int {
     // (token deltas, then a done_mark) with non-blocking try_recv, so drawing never stalls and the reply
     // grows live on screen.
     let req_ch: Channel<string> = channel(2)
+    let oll_req_ch: Channel<string> = channel(2)         // Ollama's own request channel; both workers share resp_ch/stop_ch
     let resp_ch: Channel<string> = channel(64)
     let stop_ch: Channel<bool> = channel(2)
     nursery {
     spawn api.stream_worker(api_key, req_ch, resp_ch, stop_ch)
+    spawn oll.stream_worker(ollama_base, oll_req_ch, resp_ch, stop_ch)   // the local-model twin; replies multiplex onto resp_ch
     var prev_down = false                              // mouse-down state last frame, to detect a release
     var dock_snap = json.stringify(dock.to_json())     // last-persisted workspace layout, to detect a change
     var coast = 12                                     // frames to keep free-running after the last activity
@@ -731,7 +792,7 @@ fn main() -> int {
                                 turns.append(api.mk_tool_use(cur_reply, tp_id, tp_name, tp_input))
                                 let result = run_tool(tp_name, tp_input)
                                 turns.append(api.mk_tool_result(tp_id, result))
-                                send(req_ch, api.build_request(chosen_model(model_idx, use_env, env_model), tokens_for(tok_idx), sys_prompt, tool_defs(), turns))
+                                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
                                 cur_reply = ""
                                 tool_pending = false
                                 tp_id = ""
@@ -808,6 +869,12 @@ fn main() -> int {
         var active_model = model_label(model_idx)
         if use_env {
             active_model = "(env)"
+        }
+        if provider == 1 {                                 // Ollama: the active label is the local model id
+            active_model = "(no model)"
+            if ollama_model.len() > 0 {
+                active_model = ollama_model
+            }
         }
 
         f.dock_pin("Chat")                                 // Chat is the permanent anchor — draws no close ✕
@@ -1017,6 +1084,8 @@ fn main() -> int {
             let iw = panel_cw(f, "Inspector", 120, 600)
             f.heading("Context")
             f.divider()
+            f.text_muted("Provider")
+            f.label(provider_label(provider))
             f.text_muted("Model")
             f.label(active_model)
             f.text_muted("Max tokens")
@@ -1046,7 +1115,11 @@ fn main() -> int {
                 f.label("(none — set in Settings)")
             }
             f.text_muted("Tools")
-            f.label("read_file · write_file")
+            if provider == 1 {
+                f.label("(none — local model)")
+            } else {
+                f.label("read_file · write_file")
+            }
             f.spacer()
             f.divider()
             f.row(flare.START, flare.CENTER)
@@ -1098,14 +1171,55 @@ fn main() -> int {
                 dirty = true
             }
 
-            f.text_muted("Model")
-            if use_env {
-                f.text_muted("Pinned by ANTHROPIC_MODEL")
+            f.text_muted("Provider")
+            let np = f.segmented("provider", ["Claude (API)", "Ollama (local)"], provider)
+            if np != provider {
+                provider = np
+                dirty = true
+                if provider == 1 {                          // switched to local → discover installed chat models now
+                    ollama_models = oll.list_models(ollama_base)
+                    if ollama_model.len() == 0 && ollama_models.len() > 0 {
+                        ollama_model = ollama_models[0]
+                    }
+                }
+            }
+
+            if provider == 1 {
+                // Ollama: choose from the chat models installed on THIS machine (discovered from the daemon).
+                f.text_muted("Local model")
+                if ollama_models.len() == 0 {
+                    f.label("No models found — run `ollama serve` and `ollama pull <model>`.")
+                } else {
+                    var mi = 0
+                    loop {
+                        if mi == ollama_models.len() {
+                            break
+                        }
+                        f.key("om{mi}")
+                        if f.nav_item(ollama_models[mi], ollama_models[mi] == ollama_model) {
+                            ollama_model = ollama_models[mi]
+                            dirty = true
+                        }
+                        f.key_clear()
+                        mi = mi + 1
+                    }
+                }
+                if f.ghost_button("Refresh models") {
+                    ollama_models = oll.list_models(ollama_base)
+                    if ollama_model.len() == 0 && ollama_models.len() > 0 {
+                        ollama_model = ollama_models[0]
+                    }
+                }
             } else {
-                let nm = f.segmented("model", ["Opus 4.8", "Sonnet 4.6", "Haiku 4.5"], model_idx)
-                if nm != model_idx {
-                    model_idx = nm
-                    dirty = true
+                f.text_muted("Model")
+                if use_env {
+                    f.text_muted("Pinned by ANTHROPIC_MODEL")
+                } else {
+                    let nm = f.segmented("model", ["Opus 4.8", "Sonnet 4.6", "Haiku 4.5"], model_idx)
+                    if nm != model_idx {
+                        model_idx = nm
+                        dirty = true
+                    }
                 }
             }
 
@@ -1176,9 +1290,13 @@ fn main() -> int {
         // Dispatch the turn AFTER the frame is built (so `turns` already holds the new user message).
         if want_send {
             dirty = true
-            if ready {
-                send(req_ch, api.build_request(chosen_model(model_idx, use_env, env_model), tokens_for(tok_idx), sys_prompt, tool_defs(), turns))
+            let can_send = (provider == 1 && ollama_model.len() > 0) || (provider == 0 && ready)
+            if can_send {
+                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
                 pending = true
+            } else if provider == 1 {
+                turns.append(api.mk_turn(1, "No local model selected. Start `ollama serve`, pull a model (e.g. `ollama pull llama3.2`), then choose it in Settings → Provider → Ollama."))
+                f.scroll_to_bottom("transcript")
             } else {
                 turns.append(api.mk_turn(1, "No API key visible to the app. Make sure ANTHROPIC_API_KEY is EXPORTED in the shell you launch from (export it, not just set it), then relaunch."))
                 f.scroll_to_bottom("transcript")
@@ -1216,12 +1334,9 @@ fn main() -> int {
         if retry_idx >= 1 && !want_send && !pending {
             dirty = true
             turns = turns.slice(0, retry_idx)
-            if ready {
-                var rm = model_id(model_idx)
-                if use_env {
-                    rm = env_model
-                }
-                send(req_ch, api.build_request(rm, tokens_for(tok_idx), sys_prompt, tool_defs(), turns))
+            let can_retry = (provider == 1 && ollama_model.len() > 0) || (provider == 0 && ready)
+            if can_retry {
+                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
                 pending = true
             }
             f.scroll_to_bottom("transcript")
@@ -1274,15 +1389,19 @@ fn main() -> int {
 
         // Persist the store at frame end if anything changed (a send, a committed reply, new/switch/delete/retry).
         if dirty {
-            save_store(convos, active, turns, model_idx, tok_idx, dark, f.zoom, sys_prompt, dock)
+            save_store(convos, active, turns, model_idx, tok_idx, dark, f.zoom, sys_prompt, dock, provider, ollama_model)
         }
     }
-    close(req_ch)        // wake the worker out of recv → it returns None and exits
-    }                    // nursery: joins the fetch worker here
-
+    close(req_ch)        // wake the Claude worker out of recv → it returns None and exits
+    close(oll_req_ch)    // …and the Ollama worker likewise
+    // M:N safety: tear graphics down on THIS thread (worker 0 — it owns the GL context + the Cocoa
+    // main loop) BEFORE the nursery join below. The join parks the main fiber, and under the M:N
+    // scheduler it can RESUME on a different worker thread — but raylib/OpenGL teardown (glDeleteTextures
+    // via UnloadFont) MUST run on the GL-context thread or it segfaults. The 1:1 build pins main anyway.
     if tape_path.len() > 0 {
         draw.tape_off()
     }
     draw.close()
+    }                    // nursery: joins both fetch workers here
     return 0
 }

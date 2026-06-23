@@ -227,6 +227,55 @@ static int w_http_post(const Value *a, Value *o) {
 }
 
 
+// http_get(url, headers) -> string. Like http_post but issues a GET (no body) with short connect/total
+// timeouts, so probing a model list against a down or slow server fails fast instead of hanging the
+// caller. Returns the raw response body, or `{"_curl_error":"…"}` if the transfer itself failed.
+static int w_http_get(const Value *a, Value *o) {
+    const char *url     = (const char *)AS_CSTRING(a[0]);
+    const char *headers = (const char *)AS_CSTRING(a[1]);
+    struct net_membuf m = { NULL, 0, 0 };
+    CURL *curl = curl_easy_init();
+    if (curl == NULL) {
+        o[0] = PTR_VAL(strdup("{\"_curl_error\":\"curl_easy_init failed\"}"));
+        return 1;
+    }
+    struct curl_slist *hdrs = NULL;
+    char *hcopy = strdup(headers);                 // strtok mutates, so work on a copy
+    if (hcopy != NULL) {
+        for (char *line = strtok(hcopy, "\n"); line != NULL; line = strtok(NULL, "\n")) {
+            if (*line != '\0') {
+                hdrs = curl_slist_append(hdrs, line);
+            }
+        }
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, net_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &m);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ember-http/0.1");
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 4L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    CURLcode rc = curl_easy_perform(curl);
+    curl_slist_free_all(hdrs);
+    free(hcopy);
+    curl_easy_cleanup(curl);
+    if (rc != CURLE_OK) {
+        free(m.data);
+        const char *err = curl_easy_strerror(rc);
+        size_t n = strlen(err) + 40;
+        char *e = malloc(n);
+        if (e != NULL) {
+            snprintf(e, n, "{\"_curl_error\":\"%s\"}", err);
+        }
+        o[0] = PTR_VAL(e);
+        return 1;
+    }
+    o[0] = PTR_VAL(m.data != NULL ? m.data : strdup(""));
+    return 1;
+}
+
+
 // ---- STREAMING HTTP (the std/http transport, design of record docs/http-design.md) -------------
 // A PULL stream behind an opaque Ptr handle, the fopen/fread/fclose leaf-FFI pattern (§5h): the Ember
 // worker fiber owns the channel and pumps http_next, so concurrency stays 100% Ember (fibers+channels)
@@ -419,6 +468,8 @@ static const CExternSig g_sigs[] = {
 #if EMBER_NET
     // HTTPS POST (make net): url, headers ('\n'-separated lines), body → response string.
     { "http_post", 3, { 'p', 'p', 'p' }, 1, { 'p' }, 0, 1 },
+    // HTTPS GET (make net): url, headers → response string (short timeouts — probe a model list).
+    { "http_get",  2, { 'p', 'p' },      1, { 'p' }, 0, 1 },
     // Streaming HTTP (the std/http transport): an opaque Ptr handle, pulled chunk by chunk.
     { "http_open",   3, { 'p', 'p', 'p' }, 1, { 'P' }, 0, 0 },
     { "http_next",   1, { 'P' },           1, { 'p' }, 0, 1 },   // returns a string chunk (copied + freed)
@@ -435,6 +486,7 @@ static const CExternFn g_fns[] = {
     w_strlen, w_strncmp, w_fopen, w_fread, w_fwrite, w_fclose,
 #if EMBER_NET
     w_http_post,
+    w_http_get,
     w_http_open, w_http_next, w_http_status, w_http_close,
 #endif
 };

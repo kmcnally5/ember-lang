@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Ember Language — News</title>
+    <link>https://www.ember-lang.org</link>
+    <description>Releases, milestones, and announcements from the Ember language project.</description>
+    <language>en-gb</language>
+    <lastBuildDate>Tue, 23 Jun 2026 16:35:08 -0000</lastBuildDate>
+    <atom:link href="https://www.ember-lang.org/rss/news.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Ember v0.3.42 — Unified Fault errors, interactive dock, and public launch</title>
+      <link>https://www.ember-lang.org/news#2026-06-23-ember-v0-3-42-unified-fault-errors-interactive-dock-and-public-launch</link>
+      <guid isPermaLink="false">ember-lang-news-2026-06-23-0</guid>
+      <pubDate>Tue, 23 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[Ember v0.3.42 is the first publicly released version of the language and compiler.<br>
+<br>
+Highlights: a unified <strong>Fault</strong> error-artifact system with structured diagnostics, an<br>
+interactive docking UI layer (Flare), the M:N green-thread scheduler (gated), and<br>
+a complete install script at <code>ember-lang.org/start</code>.<br>
+<br>
+The Flare UI layer — Ember's declarative immediate-mode GUI — now ships with spring<br>
+physics animations, FLIP layout transitions, presence enter/exit, toast notifications,<br>
+selectable code blocks, a draggable splitter, and idle-CPU event gating (~0% CPU when<br>
+nothing is happening).]]></description>
+    </item>
+    <item>
+      <title>M:N green-thread scheduler lands (gated)</title>
+      <link>https://www.ember-lang.org/news#2026-06-20-m-n-green-thread-scheduler-lands-gated</link>
+      <guid isPermaLink="false">ember-lang-news-2026-06-20-1</guid>
+      <pubDate>Sat, 20 Jun 2026 00:00:00 -0000</pubDate>
+      <description><![CDATA[The M:N cooperative scheduler (<code>EMBER_MN</code>) is now built and gated. A worker pool<br>
+(≈ ncpu threads) multiplexes many cooperatively-yielding fibers that park on channels<br>
+rather than blocking OS threads. Verified TSan- and ASan-clean; 8000 fibers in one<br>
+nursery confirmed working. The default remains the proven cooperative N:1 scheduler<br>
+pending a wider soak.]]></description>
+    </item>
+  </channel>
+</rss>

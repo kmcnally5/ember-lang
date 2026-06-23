@@ -82,12 +82,19 @@ The first shipped `std/http.em` is a **thin wrapper over the C externs**, not ye
 builder above. It exposes exactly the surface the desktop apps already used inline, lifted into one module:
 
 ```ember
-fn post(url: string, headers: string, body: string) -> string      // blocking, whole body at once
+fn post(url: string, headers: string, body: string) -> string      // blocking POST, whole body at once
+fn get(url: string, headers: string) -> string                     // blocking GET (short timeouts), whole body
 fn open(url: string, headers: string, body: string) -> Ptr         // streaming POST → handle
 fn next(h: Ptr) -> string                                          // next chunk ("" at end of stream)
 fn status(h: Ptr) -> i64
 fn close(move h: Ptr) -> i64                                       // consumes the linear handle
 ```
+
+`get` (added 2026-06-23) is the read counterpart to `post`: a blocking GET with a short connect/total
+timeout (4 s / 20 s) so a discovery probe against a down or slow host fails fast instead of hanging the
+caller. It was driven by the Claude app's local‑model support — listing installed Ollama models is a
+`GET /api/tags`, and the streaming `open`/`post` are both POST‑only. A transfer failure comes back as the
+same `{"_curl_error":"…"}` sentinel string `post` uses, so the caller always gets an inspectable string.
 
 `chat.em` (blocking `http.post`) and the new reusable `anthropic` client (streaming `http.open`/`next`/
 `close`, fed to `std/sse`) both import it; the inline `extern http_post`/`http_open` blocks are gone —

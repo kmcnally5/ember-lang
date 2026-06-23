@@ -62,7 +62,7 @@ ember/
   CLAUDE.md        — this file
   MANIFESTO.md     — language design philosophy and the "improve on Rust" decisions
   docs/            — language spec (language.md, grammar.ebnf) + architecture.md (compiler/toolchain decisions)
-  OFI.md           — dated log of bugs/flaws/improvements found while building
+  docs/OFI.md      — dated log of bugs/flaws/improvements found while building
   src/             — compiler source (C)
   include/         — headers + vocab.def (single source of truth for the lexical vocabulary)
   tools/           — build-time developer tools (not shipped in emberc), e.g. the editor-asset generator

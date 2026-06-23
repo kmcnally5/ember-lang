@@ -1,0 +1,4 @@
+build: model=llama3.2 stream=true nmsg=3 r0=system r1=user r2=assistant
+bare: nmsg=2 r0=user stream=false
+httpget: refused_handled=true
+=> 0

@@ -32,6 +32,13 @@ a genuine networked, interactive program.
   glance — model, max tokens, message/tool-call counts, the system prompt, and the available tools.
   Panels FLIP-animate on dock/close and snap during a resize. This is the dogfood that drove
   `dock_begin` / `dock_panel` / `dock_pin` into the language (see `docs/flare.md` → *Docking*).
+- **Phase 5 — local models via Ollama (done).** The app is no longer Claude‑only: a **Provider**
+  toggle in Settings switches between **Claude (API)** and **Ollama (local)**. With Ollama selected,
+  the app discovers the chat models installed on your machine (`GET /api/tags`) and lists them to
+  pick from; messages then stream from the local model over Ollama's OpenAI‑compatible
+  `/v1/chat/completions` endpoint — **no API key, nothing leaves the machine**. This is the one thing
+  Anthropic's own Claude Desktop can't ship: a provider‑agnostic client that also runs fully local.
+  See *Local models (Ollama)* below.
 
 ## Features
 
@@ -39,7 +46,10 @@ Everything here is wired to real behaviour — it's meant to be a *usable* app, 
 
 - **Settings panel** (gear at the bottom of the sidebar, or ⌘,) — all options take effect:
   - **Appearance** — Dark / Light theme (re‑themes the whole app).
-  - **Model** — Opus 4.8 / Sonnet 4.6 / Haiku 4.5 (changes the API `model`).
+  - **Provider** — Claude (API) / Ollama (local). Choosing Ollama discovers and lists the chat
+    models installed on your machine; pick one (or **Refresh models**). See *Local models (Ollama)*.
+  - **Model** — Opus 4.8 / Sonnet 4.6 / Haiku 4.5 (the Anthropic `model`; replaced by the discovered
+    local‑model list when the provider is Ollama).
   - **Max tokens** — 1K / 2K / 4K / 8K (changes the request).
   - **Zoom** — 60–220% (scales the conversation text + column).
   - **System prompt** — an editable field, sent to the API as `system`.
@@ -94,6 +104,36 @@ Two pieces of language work made this possible (both landed in the core compiler
 
 This is "Tadpole for Ember": a thin, typed bridge to a battle‑tested C HTTP stack, with all of the
 request building and response parsing written in pure Ember.
+
+## Local models (Ollama)
+
+The same app talks to **local models** via [Ollama](https://ollama.com) — no API key, no cloud. In
+**Settings → Provider** choose **Ollama (local)**; the app lists the chat‑capable models installed on
+your machine and streams replies from the one you pick.
+
+```sh
+# one-time: install Ollama and pull a model
+ollama serve &            # start the local daemon (http://localhost:11434)
+ollama pull llama3.2      # or any chat model — mistral-nemo, qwen2.5, phi4, …
+
+# then launch the GUI build and switch Provider → Ollama in Settings
+make net-graphics
+build/emberc-net-gfx --emit=run public/claude-desktop/flare_chat.em
+```
+
+**How it works.** Model discovery is a `GET /api/tags` (the new `std/http.get`), filtered to
+completion‑capable models (embedding‑only models are hidden). Chat uses Ollama's
+**OpenAI‑compatible** `/v1/chat/completions` with `stream: true`, so its Server‑Sent Events decode
+through the same `std/sse` as the Anthropic path — *one streaming code path, two providers*. The
+client lives in `ollama.em` (the twin of `anthropic.em`); a second worker fiber runs it alongside the
+Claude worker, and replies multiplex onto the one response channel the render loop already drains.
+
+- **`OLLAMA_HOST`** (optional) — point at a non‑default daemon (`host:port` or a full URL). Defaults
+  to `http://localhost:11434`.
+- **No key needed.** Readiness for Ollama is "a model is selected", not an API key. If no model is
+  found, the app tells you to run `ollama serve` and `ollama pull <model>`.
+- **Tools are Claude‑only for now.** The `read_file` / `write_file` agentic tools use the Anthropic
+  tool wire format; local models run as plain chat (OFI‑135 tracks OpenAI‑format tool mapping).
 
 ## Build & run
 

@@ -201,7 +201,10 @@
     main { flex: 1; }
 
     .hero {
-      padding: 3.5rem 0 2rem;
+      /* Vertical only — leave the horizontal gutter to .wrap (a `padding` shorthand here would
+         reset left/right to 0 and, since .hero is declared after .wrap, win the cascade — which
+         collapsed the side padding to 0 on mobile, where .wrap's max-width margins don't apply). */
+      padding-block: 3.5rem 2rem;
     }
 
     .badges {
@@ -493,7 +496,8 @@
     /* Sections */
     .section {
       border-top: 1px solid var(--border);
-      padding: 3rem 0;
+      /* Vertical only — keep .wrap's horizontal padding (see .hero note). */
+      padding-block: 3rem;
     }
 
     .section h2 {

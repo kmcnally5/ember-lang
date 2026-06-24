@@ -1,3 +1,9 @@
+---
+title: std/http — Design of Record
+nav_order: 8
+description: The binding design of record for Ember's std/http — the blocking and streaming HTTPS API and its libcurl-backed transport model.
+---
+
 # Ember `std/http` — Design of Record
 
 *Decided 2026-06-19. This is a binding design: the API and the transport model below are the plan; the

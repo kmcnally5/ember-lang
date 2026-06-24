@@ -1,0 +1,25 @@
+// Ember brand color scheme for Just the Docs (selected via `color_scheme: ember` in _config.yml).
+//
+// The palette is lifted straight from the bespoke landing page (docs/index.html :root) so the
+// themed docs read as the same product as the hero: warm stone neutrals with ember-orange accents.
+// This is the LIGHT scheme only — auto dark-mode (prefers-color-scheme) is a planned follow-up and
+// would add an `ember-dark` scheme plus a small scheme-switch script.
+//
+// Just the Docs imports this file early, so overriding its $-variables cascades through the theme.
+
+$body-background-color: #faf8f5; // warm off-white page background
+$sidebar-color: #f5f3f0; // slightly deeper warm tone, so the nav rail reads as a panel
+$body-text-color: #1c1917; // near-black stone
+$body-heading-color: #1c1917;
+$nav-child-link-color: #57534e; // muted stone for nested nav links
+
+$link-color: #c2410c; // ember orange — links, active nav, accents
+$btn-primary-color: #c2410c; // primary buttons
+$base-button-color: #f3f0ec;
+
+$border-color: #e7e5e4; // warm hairline borders
+$code-background-color: #f5f3f0; // inline + block code, matches the landing page's --code-bg
+$search-background-color: #ffffff;
+$search-result-preview-color: #78716c;
+$table-background-color: #ffffff;
+$feedback-color: darken($sidebar-color, 3%);

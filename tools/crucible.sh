@@ -21,6 +21,12 @@ GEN="$ROOT/build/crucible"
 EMB="${CRUCIBLE_EMB:-$ROOT/build/emberc}"
 DT="${CRUCIBLE_DT:-$ROOT/build/emberc-dt}"
 ASAN="${CRUCIBLE_ASAN:-$ROOT/build/emberc-asan}"
+
+# ASan parity with macOS: gcc's ASan enables LeakSanitizer by default on Linux, which fires on the
+# compiler's intentional bump-arena retention at exit (a non-bug) and duplicates the RSS leak oracle
+# below. Disable it so the ASan oracle checks only the temporal/spatial faults it is meant to
+# (use-after-free / double-free / overflow); leaks stay RSS-verified. No-op on macOS (LSan is off there).
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 TMP="${TMPDIR:-/tmp}/crucible.$$"
 FINDS="$ROOT/tools/crucible-finds"
 COUNT="${1:-150}"
@@ -39,17 +45,25 @@ cc -std=c17 -O2 "$ROOT/tools/crucible.c" -o "$GEN" || { say "generator build fai
 newest_src=$(ls -t "$ROOT"/src/*.c "$ROOT"/include/*.h 2>/dev/null | head -1)
 if [ ! -x "$DT" ] || [ "$newest_src" -nt "$DT" ]; then
     say "crucible: building drop-trace compiler…"
-    cc -std=c17 -Iinclude -O1 -g -DEMBER_DROP_TRACE "$ROOT"/src/*.c -o "$DT" 2>/dev/null
+    cc -std=c17 -Iinclude -D_DEFAULT_SOURCE -O1 -g -DEMBER_DROP_TRACE "$ROOT"/src/*.c -lm -o "$DT" 2>/dev/null
 fi
 if [ ! -x "$ASAN" ] || [ "$newest_src" -nt "$ASAN" ]; then
     say "crucible: building ASan compiler…"
     (cd "$ROOT" && make asan >/dev/null 2>&1)
 fi
 
-# rss_of <program.em> -> peak resident KB for one VM run (leak oracle uses this).
+# rss_of <program.em> -> peak resident KB for one VM run (leak oracle uses this). macOS /usr/bin/time
+# -l reports the peak in BYTES; GNU /usr/bin/time -v reports it in KBYTES — normalise both to KB. If
+# /usr/bin/time is absent (the `time` package isn't installed on Linux), return 0 so the leak oracle
+# is skipped cleanly rather than mis-firing on an empty reading.
 rss_of() {
-    bytes=$(/usr/bin/time -l "$EMB" --emit=run "$1" 2>&1 >/dev/null | grep -i "maximum resident" | grep -oE "[0-9]+" | head -1)
-    [ -n "$bytes" ] && echo $((bytes / 1024)) || echo 0
+    if [ "$(uname -s)" = "Darwin" ]; then
+        bytes=$(/usr/bin/time -l "$EMB" --emit=run "$1" 2>&1 >/dev/null | grep -i "maximum resident" | grep -oE "[0-9]+" | head -1)
+        [ -n "$bytes" ] && echo $((bytes / 1024)) || echo 0
+    else
+        kb=$(/usr/bin/time -v "$EMB" --emit=run "$1" 2>&1 >/dev/null | grep -i "maximum resident" | grep -oE "[0-9]+" | head -1)
+        [ -n "$kb" ] && echo "$kb" || echo 0
+    fi
 }
 
 # classify <program.em> <seed> -> a one-line failure SIGNATURE, or "" if all oracles pass.

@@ -86,46 +86,95 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 
 
-# Only macOS is supported today; the build is exercised on arm64 and x86_64. On any
-# other OS, point the user at a manual `make` build rather than guessing.
-detect_platform() {
-    os=$(uname -s 2>/dev/null || echo unknown)
-    arch=$(uname -m 2>/dev/null || echo unknown)
-    if [ "$os" != "Darwin" ]; then
-        err "Ember currently installs on macOS only (detected: $os)."
-        die "Build from source instead: git clone $EMBER_REPO && cd ember-lang && make install"
-    fi
-    info "macOS detected ($arch)."
+# Run a privileged command as root when we are not already root (prefer sudo). Empty when we ARE
+# root or when sudo is absent — in the latter case a package install simply fails and we fall back
+# to the plain, dependency-free compiler. Used only for Linux system-package installs.
+if [ "$(id -u 2>/dev/null)" = 0 ]; then SUDO=; elif have sudo; then SUDO="sudo"; else SUDO=; fi
+
+
+
+
+
+# Linux only: echo the system package manager we know how to drive (or "" if none is recognised).
+linux_pkg_mgr() {
+    for m in apt-get dnf yum pacman zypper apk; do
+        have "$m" && { echo "$m"; return 0; }
+    done
+    echo ""
 }
 
 
 
 
 
-# emberc is C17 and builds with the Apple toolchain - clang + make from the Xcode
-# Command Line Tools. There is no way to compile without them, so stop with the
-# one-line fix rather than failing deep inside make.
+# macOS and Linux are supported; the build is exercised on arm64 and x86_64 of each. On any other
+# OS, point the user at a manual `make` build rather than guessing. PLATFORM gates the toolchain
+# and dependency steps below.
+detect_platform() {
+    os=$(uname -s 2>/dev/null || echo unknown)
+    arch=$(uname -m 2>/dev/null || echo unknown)
+    case "$os" in
+        Darwin) PLATFORM="macos"; info "macOS detected ($arch)." ;;
+        Linux)  PLATFORM="linux"; info "Linux detected ($arch)." ;;
+        *)
+            err "Ember installs on macOS and Linux (detected: $os)."
+            die "Build from source instead: git clone $EMBER_REPO && cd ember-lang && make install"
+            ;;
+    esac
+}
+
+
+
+
+
+# emberc is C17 and needs a C compiler + GNU make. On macOS that is the Apple toolchain (clang +
+# make from the Xcode Command Line Tools); on Linux it is gcc/clang + make from the distro. There
+# is no way to compile without them, so stop with the one-line fix rather than failing inside make.
 ensure_toolchain() {
-    if ! xcode-select -p >/dev/null 2>&1 || ! have cc || ! have make; then
-        err "The Xcode Command Line Tools (clang + make) are required to build Ember."
-        err "Install them, then re-run this script:"
-        err "    xcode-select --install"
-        exit 1
+    if [ "$PLATFORM" = "macos" ]; then
+        if ! xcode-select -p >/dev/null 2>&1 || ! have cc || ! have make; then
+            err "The Xcode Command Line Tools (clang + make) are required to build Ember."
+            err "Install them, then re-run this script:"
+            err "    xcode-select --install"
+            exit 1
+        fi
+    else
+        if ! have cc || ! have make; then
+            err "A C compiler (gcc or clang) and GNU make are required to build Ember."
+            case "$(linux_pkg_mgr)" in
+                apt-get) err "Install them:  sudo apt-get install -y build-essential" ;;
+                dnf|yum) err "Install them:  sudo dnf groupinstall -y 'Development Tools'" ;;
+                pacman)  err "Install them:  sudo pacman -S --needed base-devel" ;;
+                zypper)  err "Install them:  sudo zypper install -y gcc make" ;;
+                apk)     err "Install them:  sudo apk add build-base" ;;
+                *)       err "Install a C toolchain (gcc/clang) and GNU make via your package manager." ;;
+            esac
+            exit 1
+        fi
     fi
     for tool in curl tar; do
         have "$tool" || die "'$tool' is required but was not found on PATH."
     done
-    step "Toolchain OK (clang + make)."
+    step "Toolchain OK (C compiler + make)."
 }
 
 
 
 
 
-# The flagship build links raylib + FreeType (graphics) and libcurl (networking).
-# raylib/freetype are resolved via pkg-config; libcurl via curl-config. We provision
-# them with Homebrew. Returns 0 if the full build can proceed, 1 to fall back to plain.
+# The flagship build links raylib + FreeType (graphics) and libcurl (networking). raylib/freetype
+# are resolved via pkg-config; libcurl via curl-config. Returns 0 if the full build can proceed, 1
+# to fall back to the plain (dependency-free) compiler. Dispatches to the per-platform provisioner.
 ensure_full_deps() {
+    if [ "$PLATFORM" = "macos" ]; then ensure_full_deps_macos; else ensure_full_deps_linux; fi
+}
+
+
+
+
+
+# macOS: provision raylib/freetype/curl with Homebrew.
+ensure_full_deps_macos() {
     if ! have brew; then
         warn "Homebrew not found - needed for the flagship (graphics + networking) build."
         warn "Install it from https://brew.sh and re-run for the full compiler."
@@ -151,6 +200,50 @@ ensure_full_deps() {
     fi
 
     warn "Could not resolve raylib/freetype2/libcurl after install."
+    return 1
+}
+
+
+
+
+
+# Linux: provision the dev packages via the system package manager. raylib is not packaged on every
+# distro/version (e.g. older Ubuntu LTS lacks libraylib-dev); when it can't be resolved we return 1
+# and the caller falls back to the plain compiler, which still runs every non-GUI program.
+ensure_full_deps_linux() {
+    mgr=$(linux_pkg_mgr)
+    if [ -z "$mgr" ]; then
+        warn "No supported package manager found (apt/dnf/pacman/zypper/apk)."
+        warn "Install pkg-config + raylib + freetype2 + libcurl dev packages, then re-run for the full build."
+        return 1
+    fi
+
+    step "Installing build dependencies via $mgr (pkg-config, raylib, freetype2, libcurl)..."
+    case "$mgr" in
+        apt-get)
+            $SUDO apt-get update -qq >/dev/null 2>&1 || true
+            $SUDO apt-get install -y pkg-config libraylib-dev libfreetype-dev libcurl4-openssl-dev \
+                >/dev/null 2>&1 || warn "$mgr reported an issue; checking whether deps resolve anyway..." ;;
+        dnf|yum)
+            $SUDO "$mgr" install -y pkgconf-pkg-config raylib-devel freetype-devel libcurl-devel \
+                >/dev/null 2>&1 || warn "$mgr reported an issue; checking whether deps resolve anyway..." ;;
+        pacman)
+            $SUDO pacman -S --needed --noconfirm pkgconf raylib freetype2 curl \
+                >/dev/null 2>&1 || warn "pacman reported an issue; checking whether deps resolve anyway..." ;;
+        zypper)
+            $SUDO zypper install -y pkg-config raylib-devel freetype2-devel libcurl-devel \
+                >/dev/null 2>&1 || warn "zypper reported an issue; checking whether deps resolve anyway..." ;;
+        apk)
+            $SUDO apk add pkgconf raylib-dev freetype-dev curl-dev \
+                >/dev/null 2>&1 || warn "apk reported an issue; checking whether deps resolve anyway..." ;;
+    esac
+
+    if pkg-config --exists raylib freetype2 2>/dev/null && have curl-config; then
+        step "Graphics + networking dependencies OK."
+        return 0
+    fi
+
+    warn "Could not resolve raylib/freetype2/libcurl (raylib isn't packaged on every distro)."
     return 1
 }
 
@@ -239,9 +332,11 @@ setup_path() {
         return 0
     fi
 
+    # macOS Terminal starts login shells (so bash reads ~/.bash_profile); most Linux terminals start
+    # interactive non-login shells (so bash reads ~/.bashrc). Pick the file the shell actually sources.
     case "$(basename "${SHELL:-sh}")" in
         zsh)  rc="$HOME/.zshrc" ;;
-        bash) rc="$HOME/.bash_profile" ;;
+        bash) [ "$PLATFORM" = "macos" ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
         *)    rc="$HOME/.profile" ;;
     esac
 

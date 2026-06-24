@@ -1,0 +1,11 @@
+# Local preview only. GitHub Pages builds the site server-side and never reads this file (it is
+# listed in _config.yml `exclude`). The `github-pages` gem pins the exact toolchain Pages runs —
+# Jekyll 3.10, jekyll-seo-tag, jekyll-remote-theme, jekyll-include-cache — so a local
+# `bundle exec jekyll serve` matches production byte-for-byte.
+#
+# Requires a modern Ruby (>= 3.x); the macOS system Ruby (2.6) is too old. Install one with
+# `brew install ruby` (or rbenv/asdf), then:  cd docs && bundle install && bundle exec jekyll serve
+source "https://rubygems.org"
+
+gem "github-pages", group: :jekyll_plugins
+gem "webrick" # Ruby 3 dropped webrick from stdlib; `jekyll serve`'s dev server needs it

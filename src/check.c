@@ -3275,7 +3275,10 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     e->variant_enum_id = qvar->enum_id;
                     e->variant_tag     = qvar->variant_index;
                     int qargc = (int)e->as.call.arg_count;
-                    SemType at[MAX_PARAMS];
+                    // Zero-init: the fill loop sets at[0..n-1] (n = min(qargc, MAX_PARAMS)) and only
+                    // those are read, so this is safe — but gcc -O2 can't prove the bound matches n
+                    // and warns (-Wmaybe-uninitialized, a false positive). Init makes it provable.
+                    SemType at[MAX_PARAMS] = {0};
                     for (int i = 0; i < qargc && i < MAX_PARAMS; i++) {
                         at[i] = check_expr(c, e->as.call.args[i]);
                     }
@@ -4371,7 +4374,9 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     e->variant_tag     = v->variant_index;
                     // check_expr already cleared c->expected, so the arguments are
                     // checked without the construction's expected type.
-                    SemType at[MAX_PARAMS];
+                    // Zero-init: as above — at[0..n-1] are the only entries read; gcc -O2's
+                    // -Wmaybe-uninitialized can't see that and false-positives without the init.
+                    SemType at[MAX_PARAMS] = {0};
                     for (int i = 0; i < argc && i < MAX_PARAMS; i++) {
                         at[i] = check_expr(c, e->as.call.args[i]);
                     }

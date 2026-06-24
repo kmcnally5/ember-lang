@@ -1,0 +1,8 @@
+<!-- Just the Docs injects this into <head> on every page (its customization hook). Migrated from
+     the old minima-era custom-head.html. The noindex toggle lets a page opt out of search indexing
+     via `noindex: true` in its front matter — used by THE_EMBER_BOOK.md, which is kept as a
+     single-page read-through but de-indexed so it does not compete with the split /guide pages. -->
+<link rel="icon" href="/favicon.ico" sizes="48x48 32x32 16x16" type="image/x-icon">
+{%- if page.noindex %}
+<meta name="robots" content="noindex, nofollow">
+{%- endif %}

@@ -1,0 +1,93 @@
+name: CI
+
+# Build + test Ember on both supported platforms. There were no prebuilt releases and no CI when
+# this landed, so this is also the first automated proof the macOS build keeps working — but the
+# headline reason it exists is to keep the Linux port honest: a macOS-ism (a missing -lm, a glibc
+# feature-test macro, a gcc -Werror gripe) that compiles on a Mac but breaks Linux fails here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x86_64 (gcc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The CORE build is dependency-free. build-essential = gcc + make; time = /usr/bin/time, used
+      # by crucible's RSS leak oracle; libcurl is the only system lib the networking build needs.
+      - name: Install core dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential time pkg-config \
+            libfreetype-dev libcurl4-openssl-dev
+
+      # --- Core: the dependency-free compiler + the full golden suite (must always pass) ---
+      - name: Build (dev)
+        run: make
+      - name: Regression suite
+        run: make test
+
+      # --- Concurrency: the multicore runtime (-pthread on Linux) + its correctness suite ---
+      - name: Parallel build
+        run: make parallel
+      - name: Parallel suite
+        run: make test-parallel
+
+      # --- Verification gates (the project's own fuzzers/consistency checks) ---
+      - name: Gate — opcheck (operand codec)
+        run: make opcheck
+      - name: Gate — ceilings (narrow-operand stress)
+        run: make ceilings
+      - name: Gate — ledger (Ptr linearity)
+        run: make ledger
+      - name: Gate — crucible (memory-ownership fuzzer)
+        run: make crucible
+
+      # --- Networking (libcurl only — no display dependency, portable everywhere) ---
+      - name: Networking suite
+        run: make test-net
+
+      # --- Flagship graphics build. raylib is NOT packaged in Debian/Ubuntu, so build it from source
+      #     (its CMake installs a raylib.pc that pkg-config then finds). Compile + link is the proof;
+      #     the GUI needs a display, so it is not launched here. ---
+      - name: Build raylib from source (not packaged on Debian/Ubuntu)
+        run: |
+          sudo apt-get install -y cmake git libgl1-mesa-dev libx11-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j"$(nproc)"
+          sudo cmake --install /tmp/raylib/build
+          sudo ldconfig
+      - name: Flagship build (raylib + libcurl)
+        run: make net-graphics
+
+  macos:
+    name: macOS arm64 (clang)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # On macOS raylib IS packaged (Homebrew), so the flagship needs no source build.
+      - name: Install build dependencies
+        run: brew install pkg-config raylib freetype curl || true
+
+      - name: Build (dev)
+        run: make
+      - name: Regression suite
+        run: make test
+      - name: Parallel suite
+        run: make test-parallel
+      - name: Full verify gate
+        run: make verify
+      - name: Flagship build (raylib + libcurl)
+        run: make net-graphics

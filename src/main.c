@@ -642,14 +642,19 @@ static int compile_native(const TokenList *tokens, const char *name,
     // A concurrent program needs the THREADED runtime: build with -DEMBER_PARALLEL (atomic
     // refcounts + the channel/nursery pthread machinery) and link the parallel runtime variant
     // + pthread. A serial program links the default runtime with no threading cost.
-    char cmd[8192];
+    //   -D_DEFAULT_SOURCE: expose the POSIX functions the runtime uses under strict -std=c17 on
+    //                      glibc (no-op on macOS).  -lm: libm is a separate library on Linux
+    //                      (folded into libc on macOS) — it must follow the objects on the link
+    //                      line.  -pthread (portable spelling, both platforms) for the parallel rt.
+    char cmd[16384];
     if (concurrent) {
         snprintf(cmd, sizeof cmd,
-                 "cc -std=c17 -O2 -DEMBER_PARALLEL=1 -I'%s' '%s' '%s/libember_rt_par.a' "
-                 "-lpthread -o '%s'",
+                 "cc -std=c17 -O2 -D_DEFAULT_SOURCE -DEMBER_PARALLEL=1 -I'%s' '%s' "
+                 "'%s/libember_rt_par.a' -pthread -lm -o '%s'",
                  incdir, cpath, libdir, out_path);
     } else {
-        snprintf(cmd, sizeof cmd, "cc -std=c17 -O2 -I'%s' '%s' '%s/libember_rt.a' -o '%s'",
+        snprintf(cmd, sizeof cmd,
+                 "cc -std=c17 -O2 -D_DEFAULT_SOURCE -I'%s' '%s' '%s/libember_rt.a' -lm -o '%s'",
                  incdir, cpath, libdir, out_path);
     }
     int rc = system(cmd);

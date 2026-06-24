@@ -2,8 +2,64 @@
 # main branch; Jekyll renders each Markdown file to a routed HTML page (docs/language.md ->
 # /language). See docs/architecture.md for the hosting decision.
 title: Ember
-description: A statically-typed, brace-delimited systems language — safe without a GC.
-theme: minima
+description: A statically-typed, brace-delimited systems language — memory-safe without a GC.
+# Canonical host (no trailing slash) — jekyll-seo-tag builds absolute canonical + Open Graph URLs
+# from this. The apex ember-lang.org 301-redirects to www (see docs/architecture.md).
+url: https://www.ember-lang.org
+baseurl: ""
+
+# Theme: Just the Docs, pulled in as a REMOTE theme. This builds on GitHub Pages' native
+# "deploy from a branch" pipeline (no GitHub Actions): jekyll-remote-theme is whitelisted by
+# Pages, and JTD v0.12 needs only jekyll >= 3.8.5 — comfortably under the Jekyll 3.10 that Pages
+# runs. It gives every Markdown page a left sidebar, prev/next, and built-in client-side search.
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+
+# GitHub-Pages-whitelisted plugins:
+#   jekyll-seo-tag        — per-page <title>, meta description, canonical, Open Graph, JSON-LD.
+#   jekyll-remote-theme   — lets Pages load Just the Docs as if it were a gem theme.
+#   jekyll-include-cache  — required by Just the Docs (it uses {% include_cached %}).
+#   jekyll-sitemap        — auto-generates /sitemap.xml covering every page, including the
+#                           generated /guide/* chapters (pages can opt out with `sitemap: false`).
+plugins:
+  - jekyll-seo-tag
+  - jekyll-remote-theme
+  - jekyll-include-cache
+  - jekyll-sitemap
+
+# --- Just the Docs options -------------------------------------------------
+# The Ember brand palette (stone + ember-orange) lives in _sass/color_schemes/ember.scss.
+color_scheme: ember
+logo: "/ember.png"
+search_enabled: true
+search:
+  heading_level: 2     # index headings down to h2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  rel_url: true
+  button: false
+heading_anchors: true
+back_to_top: true
+back_to_top_text: "Back to top"
+# Top-right link out to the source.
+aux_links:
+  "Ember on GitHub":
+    - "https://github.com/kmcnally5/ember-lang"
+aux_links_new_tab: true
+
+# Default to large-image social cards, with the branded 1200x630 card as the default Open Graph
+# image for every doc page (a page may override `image:` in its own front matter). `layout: default`
+# gives every PROCESSED Markdown page the Just the Docs chrome; the hand-written index.html and
+# what-is-ember.html have no front matter, so Jekyll copies them verbatim and they stay bespoke.
+twitter:
+  card: summary_large_image
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+      image: /og-card.png
+
 # Keep build artifacts and dev-internal docs out of the PUBLISHED site (they stay in the repo for
 # contributors — this only controls what becomes a web page on ember-lang.org).
 exclude:
@@ -11,3 +67,8 @@ exclude:
   - CNAME
   - claude-app-roadmap.md
   - design/
+  - Gemfile
+  - Gemfile.lock
+  - vendor/
+  - .jekyll-cache/
+  - .sass-cache/

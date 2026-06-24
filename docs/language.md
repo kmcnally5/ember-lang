@@ -1,3 +1,9 @@
+---
+title: Language Reference
+nav_order: 3
+description: The canonical syntax and semantics reference for Ember — a statically-typed, brace-delimited systems language that is memory-safe without a garbage collector and compiles to C.
+---
+
 # The Ember Language Reference
 
 The canonical *how-to-write-Ember* document. It is a **living reference**: it describes only

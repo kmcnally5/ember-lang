@@ -1,5 +1,7 @@
 ---
-title: Ember
+title: Get started
+nav_order: 1
+description: Install the emberc compiler and run your first Ember program. Ember is a statically-typed systems language — memory-safe without a garbage collector, compiled to C.
 ---
 
 # Ember
@@ -17,7 +19,8 @@ reference compiler is written in C with no third-party dependencies.
 
 - [Home](/) — the landing page.
 - [Language reference](/language) — what runs today.
-- [The Ember Book](/THE_EMBER_BOOK) — the long-form guided tour.
+- [The Ember Book](/guide/) — the long-form guided tour.
+- [For LLMs](/for-llms) — the priors cheat-sheet; paste it into a model before asking it to write Ember.
 - [Flare](/flare) — the declarative UI layer.
 - [Architecture](/architecture) — compiler & toolchain decisions.
 - [Manifesto](https://github.com/kmcnally5/ember-lang/blob/main/MANIFESTO.md) — the design philosophy and the decisions behind the language.

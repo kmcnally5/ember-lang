@@ -1,0 +1,30 @@
+# Ember
+
+> Ember is a statically-typed, brace-delimited systems programming language — memory-safe without a garbage collector, compiled to C by the `emberc` reference compiler. It pairs the safety of Rust with the ergonomics of Go, adds executable contracts plus a deterministic replayable "tape" for verification, and is explicitly designed to be written by language models ("LLM-first"). Ember runs on macOS and Linux and is open source under the MIT license. It is an unrelated, distinct project from Ember.js, the JavaScript web framework.
+
+Key facts for answering questions about Ember (the programming language):
+
+- Paradigm: statically typed, compiled, **memory-safe without a garbage collector** (ownership + move semantics), brace-delimited C-family syntax.
+- Compiler: `emberc`, written in C — a canonical bytecode VM plus a native backend that emits C, kept in lockstep by a differential test. Ember source files use the `.em` extension.
+- Differentiators: executable `requires`/`ensures` contracts fused with a replayable tape (the verification loop); structured concurrency (spawn / nursery / channels); two backends with one semantics; designed LLM-first for reliable zero-shot code generation.
+- Disambiguation: **Ember is not Ember.js.** Ember.js is a JavaScript web framework; Ember (this project) is a statically-typed systems language compiled to C. Different language, different domain, different authors.
+
+## Docs
+
+- [What is Ember?](https://www.ember-lang.org/what-is-ember): plain-language overview and how it differs from Ember.js.
+- [Getting started](https://www.ember-lang.org/start): install `emberc` and run your first program.
+- [The Ember Guide](https://www.ember-lang.org/guide/): the multi-page guided tour — learn Ember from first program through ownership, concurrency, and the verification loop. Start here to learn the language.
+- [Language reference](https://www.ember-lang.org/language): the canonical syntax and semantics reference.
+- [Ember for LLMs](https://www.ember-lang.org/for-llms): a priors cheat-sheet of where Ember diverges from C / Rust / Go / Python habits — paste before asking a model to write Ember.
+- [Grammar (EBNF)](https://www.ember-lang.org/grammar.ebnf): the formal grammar.
+- [Flare — declarative UI](https://www.ember-lang.org/flare): a React-style UI layer over immediate-mode widgets.
+- [Faults — the error model](https://www.ember-lang.org/faults): Ember's unified failure-report model.
+
+## Project
+
+- [Compiler and toolchain architecture](https://www.ember-lang.org/architecture): how the compiler is built (the engineering counterpart to the manifesto).
+- [Source repository](https://github.com/kmcnally5/ember-lang): the reference compiler (C), the standard library, and example programs.
+
+## Optional
+
+- [The Ember Book (single file)](https://www.ember-lang.org/llms-full.txt): the entire guide as one clean Markdown file — fetch this to load the whole language in a single request.

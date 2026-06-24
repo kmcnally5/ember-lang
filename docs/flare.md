@@ -1,3 +1,9 @@
+---
+title: Flare — declarative UI
+nav_order: 4
+description: Flare is Ember's React-style declarative UI layer over immediate-mode widgets — components as functions, props, and local state, with no virtual DOM.
+---
+
 # Flare — declarative, component-style UI for Ember
 
 `std/flare` is Ember's React-style UI layer, built on `std/ui`'s immediate-mode widgets

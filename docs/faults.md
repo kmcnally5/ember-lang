@@ -1,3 +1,9 @@
+---
+title: Faults — the error model
+nav_order: 5
+description: Ember's unified failure report — one Fault artifact for builtin traps, contract violations, and errors, rendered for both humans and AI agents.
+---
+
 # Faults — Ember's unified failure report
 
 > Status: **Phase 0 + Phase 1 (runtime core) shipped.** Compile-side convergence, the

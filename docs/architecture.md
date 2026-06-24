@@ -1,3 +1,9 @@
+---
+title: Compiler & Toolchain Architecture
+nav_order: 7
+description: Engineering decisions behind the Ember compiler and toolchain (emberc) — the canonical bytecode VM, the native C backend, and the build system.
+---
+
 # Ember — Compiler & Toolchain Architecture
 
 *Engineering decisions for the **compiler and toolchain**. The counterpart to [MANIFESTO.md](../MANIFESTO.md). Started June 2026.*
@@ -1595,3 +1601,50 @@ Two repo/toolchain decisions made while preparing the first public push:
   working clone (`editors/zed/tree-sitter-ember/`) and Zed's fetch-cache (`editors/zed/grammars/`)
   stay gitignored. Rev-bump flow: edit `grammar.js` → `tree-sitter generate` → commit + push the
   grammar repo → update `rev` in `extension.toml`.
+
+
+
+## Decision: Linux is a first-class second platform — one Makefile, additive flags, validated against real Linux
+
+Ember now targets **macOS and Linux (x86_64 + arm64)**, not macOS alone. The reference compiler was
+already clean POSIX C17 — no `__APPLE__`, `mach/*`, frameworks, `mmap`/`MAP_ANON`, or arch
+assumptions, and `realpath(argv[0])` (not `_NSGetExecutablePath`) for stdlib resolution — so the port
+was entirely a *build* concern. The decisions made (the failure analysis is OFI-141):
+
+- **One Makefile, no `#ifdef` per platform.** The Linux needs (re-expose glibc's POSIX functions
+  under strict `-std=c17`; link libm; pass `-pthread`) are all **no-ops on macOS**, so they are added
+  unconditionally rather than guarded. `PORTABLE_DEFS := -D_DEFAULT_SOURCE` is appended to every
+  compile flag group; `LDLIBS_MATH := -lm` is appended **after the objects** on every link line (link
+  order matters under `--as-needed`); `-pthread` goes on the `EMBER_PARALLEL` groups. The native
+  `emberc -o` command (src/main.c) carries the same. Chosen over a platform-detecting Makefile (a
+  `uname` branch buys nothing when the flags are harmless everywhere) and over per-file feature-macro
+  `#define`s (ordering-fragile across 27 translation units; one build-system line is the single point
+  of truth). `-D_DEFAULT_SOURCE` was preferred over switching to `-std=gnu17` to keep the strict-ISO
+  baseline the project chose — we opt into exactly the POSIX surface we use, nothing more.
+
+- **Validate against real Linux, not by reasoning.** Every fix was driven by an observed failure in a
+  throwaway Docker container (`gcc:13`/glibc 2.36 and `ubuntu:24.04`, x86_64) — the same "trust the
+  tape" discipline used for runtime bugs, applied to the toolchain. This is what caught the items pure
+  reasoning would have missed: the `-lm` link failure, gcc's `-Werror=format-truncation` exposing a
+  **real latent miscompile** (a 24-byte buffer truncating a generated C identifier) that Apple clang
+  silently passed, the `-O2`-only `-Wmaybe-uninitialized`, and the gate scripts' own un-ported `cc`
+  lines. The macOS host was re-verified (all 7 gates) after every change so the shared Makefile never
+  regressed the original platform.
+
+- **CI is the durability mechanism.** The project had no CI; `.github/workflows/ci.yml` now runs the
+  full gate (build + test + parallel + opcheck/ceilings/ledger/crucible + the flagship build) on both
+  Linux and macOS for every push/PR. The point is asymmetry: a macOS-ism that compiles on a Mac but
+  breaks Linux (a missing `-lm`, a hidden POSIX symbol, a gcc `-Werror` gripe) is invisible locally and
+  only a Linux job will catch it — so Linux support cannot silently bit-rot.
+
+- **ASan parity.** gcc enables LeakSanitizer by default on Linux (it is off/unsupported on macOS).
+  Rather than adopt it now — it fires on the compiler's intentional bump-arena retention at exit and
+  duplicates crucible's own RSS leak oracle — the gates run with `ASAN_OPTIONS=detect_leaks=0` for
+  parity; leaks stay RSS-verified on both platforms. Turning LSan on as a *stronger* Linux-only leak
+  detector (with suppressions for the deliberate exit-time arenas) is a future opportunity, not part of
+  the port.
+
+The one gap is provisioning, not portability: **raylib is not packaged in Debian/Ubuntu**, so the
+graphics flagship is built from raylib source in CI and the installer falls back to the plain compiler
+where the distro lacks it (OFI-142). The language, its concurrency, the native backend, and networking
+(libcurl) are fully portable with zero special provisioning.

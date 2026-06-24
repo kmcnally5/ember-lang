@@ -2625,7 +2625,11 @@ static void emit_stmt(CgcGen *g, const Stmt *s) {
                 // Reassigning an owned binding: evaluate the new value (which may read the
                 // old one), drop the old, then store — so the replaced value can't leak.
                 int t = g->next_var++;
-                char cn[24];
+                // Copy the cname before emit_expr below (which may grow/realloc g->scope and
+                // invalidate the pointer). Size it to the FULL cname field — a smaller buffer
+                // truncates the generated C identifier into a different name (a latent miscompile
+                // clang never flagged; gcc -Wformat-truncation does).
+                char cn[sizeof g->scope[0].cname];
                 snprintf(cn, sizeof cn, "%s", g->scope[bi].cname);
                 cgc_indent(g);
                 fprintf(g->out, "{ Value v%d = ", t);

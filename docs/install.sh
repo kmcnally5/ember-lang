@@ -16,6 +16,7 @@
 #   EMBER_PROFILE          full | plain                  (default: full)
 #   EMBER_REPO             source repository             (default: the official repo)
 #   EMBER_NO_MODIFY_PATH   set to 1 to skip editing your shell rc file
+#   EMBER_RAYLIB_VERSION   raylib tag to build from source where unpackaged  (default: 5.5)
 #
 # Re-running is safe: it rebuilds and replaces the existing install in place.
 
@@ -25,6 +26,7 @@ EMBER_REPO="${EMBER_REPO:-https://github.com/kmcnally5/ember-lang}"
 EMBER_REF="${EMBER_REF:-main}"
 EMBER_PREFIX="${EMBER_PREFIX:-$HOME/.ember}"
 EMBER_PROFILE="${EMBER_PROFILE:-full}"
+EMBER_RAYLIB_VERSION="${EMBER_RAYLIB_VERSION:-5.5}"
 BUILD_LOG="${TMPDIR:-/tmp}/ember-install-build.log"
 WORKDIR=""
 
@@ -87,7 +89,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 
 # Run a privileged command as root when we are not already root (prefer sudo). Empty when we ARE
-# root or when sudo is absent — in the latter case a package install simply fails and we fall back
+# root or when sudo is absent - in the latter case a package install simply fails and we fall back
 # to the plain, dependency-free compiler. Used only for Linux system-package installs.
 if [ "$(id -u 2>/dev/null)" = 0 ]; then SUDO=; elif have sudo; then SUDO="sudo"; else SUDO=; fi
 
@@ -207,43 +209,102 @@ ensure_full_deps_macos() {
 
 
 
-# Linux: provision the dev packages via the system package manager. raylib is not packaged on every
-# distro/version (e.g. older Ubuntu LTS lacks libraylib-dev); when it can't be resolved we return 1
-# and the caller falls back to the plain compiler, which still runs every non-GUI program.
+# Linux: provision the dev packages via the system package manager. freetype + libcurl are packaged
+# on every distro; raylib is NOT in Debian/Ubuntu (only Arch/Fedora/openSUSE/Homebrew carry it), so
+# where the distro lacks it we build raylib from source. If even that can't be set up we return 1 and
+# the caller falls back to the plain compiler, which still runs every non-GUI program.
 ensure_full_deps_linux() {
     mgr=$(linux_pkg_mgr)
     if [ -z "$mgr" ]; then
         warn "No supported package manager found (apt/dnf/pacman/zypper/apk)."
-        warn "Install pkg-config + raylib + freetype2 + libcurl dev packages, then re-run for the full build."
+        warn "Install pkg-config + freetype2 + libcurl (and raylib) dev packages, then re-run for the full build."
         return 1
     fi
 
-    step "Installing build dependencies via $mgr (pkg-config, raylib, freetype2, libcurl)..."
+    # 1) The deps packaged EVERYWHERE - freetype, libcurl, pkg-config - on their OWN invocation. apt
+    #    (and friends) install atomically, so bundling the often-missing raylib package here would
+    #    abort the whole command and leave even freetype/curl uninstalled (the fall-back-to-plain bug).
+    step "Installing graphics + networking dependencies via $mgr (pkg-config, freetype2, libcurl)..."
     case "$mgr" in
-        apt-get)
-            $SUDO apt-get update -qq >/dev/null 2>&1 || true
-            $SUDO apt-get install -y pkg-config libraylib-dev libfreetype-dev libcurl4-openssl-dev \
-                >/dev/null 2>&1 || warn "$mgr reported an issue; checking whether deps resolve anyway..." ;;
-        dnf|yum)
-            $SUDO "$mgr" install -y pkgconf-pkg-config raylib-devel freetype-devel libcurl-devel \
-                >/dev/null 2>&1 || warn "$mgr reported an issue; checking whether deps resolve anyway..." ;;
-        pacman)
-            $SUDO pacman -S --needed --noconfirm pkgconf raylib freetype2 curl \
-                >/dev/null 2>&1 || warn "pacman reported an issue; checking whether deps resolve anyway..." ;;
-        zypper)
-            $SUDO zypper install -y pkg-config raylib-devel freetype2-devel libcurl-devel \
-                >/dev/null 2>&1 || warn "zypper reported an issue; checking whether deps resolve anyway..." ;;
-        apk)
-            $SUDO apk add pkgconf raylib-dev freetype-dev curl-dev \
-                >/dev/null 2>&1 || warn "apk reported an issue; checking whether deps resolve anyway..." ;;
+        apt-get)  $SUDO apt-get update -qq >/dev/null 2>&1 || true
+                  $SUDO apt-get install -y pkg-config libfreetype-dev libcurl4-openssl-dev >/dev/null 2>&1 || true ;;
+        dnf|yum)  $SUDO "$mgr" install -y pkgconf-pkg-config freetype-devel libcurl-devel >/dev/null 2>&1 || true ;;
+        pacman)   $SUDO pacman -S --needed --noconfirm pkgconf freetype2 curl >/dev/null 2>&1 || true ;;
+        zypper)   $SUDO zypper install -y pkg-config freetype2-devel libcurl-devel >/dev/null 2>&1 || true ;;
+        apk)      $SUDO apk add pkgconf freetype-dev curl-dev >/dev/null 2>&1 || true ;;
     esac
+
+    # 2) raylib via the distro package (Arch/Fedora/openSUSE carry it; a harmless no-op where absent).
+    case "$mgr" in
+        apt-get)  $SUDO apt-get install -y libraylib-dev >/dev/null 2>&1 || true ;;
+        dnf|yum)  $SUDO "$mgr" install -y raylib-devel  >/dev/null 2>&1 || true ;;
+        pacman)   $SUDO pacman -S --needed --noconfirm raylib >/dev/null 2>&1 || true ;;
+        zypper)   $SUDO zypper install -y raylib-devel  >/dev/null 2>&1 || true ;;
+        apk)      $SUDO apk add raylib-dev >/dev/null 2>&1 || true ;;
+    esac
+
+    # 3) Still no raylib (the Debian/Ubuntu case) - build it from source (installs a raylib.pc).
+    if ! pkg-config --exists raylib 2>/dev/null; then
+        ensure_raylib_from_source "$mgr" || true
+    fi
 
     if pkg-config --exists raylib freetype2 2>/dev/null && have curl-config; then
         step "Graphics + networking dependencies OK."
         return 0
     fi
 
-    warn "Could not resolve raylib/freetype2/libcurl (raylib isn't packaged on every distro)."
+    warn "Could not resolve raylib/freetype2/libcurl after install."
+    return 1
+}
+
+
+
+
+
+# raylib is not in the Debian/Ubuntu repositories, so build + install it from source: CMake installs
+# a raylib.pc into /usr/local that pkg-config + the linker then find. Needs cmake, git, and the GL/X11
+# dev headers. Returns non-zero on any failure so the caller falls back to the plain compiler.
+ensure_raylib_from_source() {
+    mgr="$1"
+    step "raylib isn't packaged on this distro - building raylib $EMBER_RAYLIB_VERSION from source (one-time)..."
+    case "$mgr" in
+        apt-get)  $SUDO apt-get install -y cmake git libgl1-mesa-dev libx11-dev libxrandr-dev \
+                      libxinerama-dev libxcursor-dev libxi-dev >/dev/null 2>&1 || true ;;
+        dnf|yum)  $SUDO "$mgr" install -y cmake git mesa-libGL-devel libX11-devel libXrandr-devel \
+                      libXinerama-devel libXcursor-devel libXi-devel >/dev/null 2>&1 || true ;;
+        pacman)   $SUDO pacman -S --needed --noconfirm cmake git mesa libx11 libxrandr libxinerama \
+                      libxcursor libxi >/dev/null 2>&1 || true ;;
+        zypper)   $SUDO zypper install -y cmake git Mesa-libGL-devel libX11-devel libXrandr-devel \
+                      libXinerama-devel libXcursor-devel libXi-devel >/dev/null 2>&1 || true ;;
+        apk)      $SUDO apk add cmake git mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+                      libxcursor-dev libxi-dev >/dev/null 2>&1 || true ;;
+    esac
+    if ! have cmake || ! have git; then
+        warn "cmake and git are required to build raylib from source - skipping the graphics build."
+        return 1
+    fi
+
+    rl_dir=$(mktemp -d)
+    if ! git clone --depth 1 --branch "$EMBER_RAYLIB_VERSION" https://github.com/raysan5/raylib \
+            "$rl_dir/raylib" >/dev/null 2>&1; then
+        git clone --depth 1 https://github.com/raysan5/raylib "$rl_dir/raylib" >/dev/null 2>&1 || {
+            warn "Could not clone raylib."; rm -rf "$rl_dir"; return 1; }
+    fi
+    step "Compiling raylib (this can take a minute)..."
+    if cmake -S "$rl_dir/raylib" -B "$rl_dir/build" -DBUILD_SHARED_LIBS=ON -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 \
+       && cmake --build "$rl_dir/build" -j"$(nproc 2>/dev/null || echo 2)" >/dev/null 2>&1 \
+       && $SUDO cmake --install "$rl_dir/build" >/dev/null 2>&1; then
+        $SUDO ldconfig >/dev/null 2>&1 || true
+        rm -rf "$rl_dir"
+        # CMake installs to /usr/local - make sure pkg-config sees raylib.pc there for the build below.
+        PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export PKG_CONFIG_PATH
+        if pkg-config --exists raylib 2>/dev/null; then return 0; fi
+        return 1
+    fi
+    warn "raylib build/install failed."
+    rm -rf "$rl_dir"
     return 1
 }
 

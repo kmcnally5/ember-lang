@@ -21,8 +21,8 @@
 0020    |  CONST    1  (= 0)
 0022    |  SET_LOCAL 1
 0024    |  POP     
-0025    |  DROP     1
-0027    |  DROP     2
+0025    |  DROP     2
+0027    |  DROP     1
 0029    |  RETURN  
 0030    |  JUMP     1 (-> 0034)
 0033    |  POP     
@@ -30,12 +30,12 @@
 0036    |  CONST    2  (= 0)
 0038    |  SET_LOCAL 2
 0040    |  POP     
-0041    |  DROP     1
-0043    |  DROP     2
+0041    |  DROP     2
+0043    |  DROP     1
 0045    |  RETURN  
 0046    |  CONST    3  (= 0)
-0048    |  DROP     1
-0050    |  DROP     2
+0048    |  DROP     2
+0050    |  DROP     1
 0052    |  RETURN  
 == fn main (arity 0) ==
 0000   20  CONST    0  (= 3)
@@ -76,8 +76,8 @@
 0020    |  CONST    1  (= 0)
 0022    |  SET_LOCAL 1
 0024    |  POP     
-0025    |  DROP     1
-0027    |  DROP     2
+0025    |  DROP     2
+0027    |  DROP     1
 0029    |  RETURN  
 0030    |  JUMP     1 (-> 0034)
 0033    |  POP     
@@ -85,10 +85,10 @@
 0036    |  CONST    2  (= 0)
 0038    |  SET_LOCAL 2
 0040    |  POP     
-0041    |  DROP     1
-0043    |  DROP     2
+0041    |  DROP     2
+0043    |  DROP     1
 0045    |  RETURN  
 0046    |  CONST    3  (= 0)
-0048    |  DROP     1
-0050    |  DROP     2
+0048    |  DROP     2
+0050    |  DROP     1
 0052    |  RETURN  

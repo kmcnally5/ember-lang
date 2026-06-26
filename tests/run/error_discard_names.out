@@ -1,0 +1,4 @@
+tests/run/error_discard_names.em:4:1: error: a struct cannot be named '_' — it is the discard, not a usable type name
+tests/run/error_discard_names.em:5:1: error: a type with this name is already declared in this module
+tests/run/error_discard_names.em:5:1: error: an enum cannot be named '_' — it is the discard, not a usable type name
+tests/run/error_discard_names.em:3:1: error: a function cannot be named '_' — it is the write-only discard, not a usable name

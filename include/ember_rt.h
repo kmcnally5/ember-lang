@@ -64,11 +64,16 @@
 // `&vm->rt`; a compiled program declares one global and passes `&g_em`. Carrying the
 // struct table here — instead of reaching through a CompiledProgram — is what lets the
 // extracted runtime link into a standalone binary with no front-end.
-typedef struct {
+typedef struct EmberRt {
     Obj              *objects;             // this context's live-object list (lock-free, same-thread)
     Obj              *pool[POOL_CLASSES];  // size-classed recycle freelist
     const StructType *structs;             // struct-layout table (indexed by struct type id)
     int               struct_count;
+    // OFI-122: invoke an Ember function by its table index — args[0..] are its arguments, the result
+    // is returned. Each backend sets this at startup (VM: a re-entrant interpreter call; native:
+    // em_invoke). drop_value uses it to run a `resource`'s user `drop(self)` during teardown. NULL
+    // when unset (a program with no resources never needs it).
+    Value           (*invoke)(struct EmberRt *ctx, int fn_index, Value *args);
 } EmberRt;
 
 // The object runtime (src/runtime.c). Allocators thread onto ctx->objects; drop and
@@ -103,6 +108,9 @@ void           rt_free_objects(EmberRt *ctx);
 // tag for match dispatch is read inline.
 Value          em_enum(EmberRt *ctx, int enum_id, int variant, int n, ...);
 Value          em_enum_field(EmberRt *ctx, Value v, int index);
+// Like em_enum_field but TRANSFERS ownership (the native `?`-extract, OFI-122): a unique-owner
+// aggregate payload is moved out (the enum slot nil'd); a refcounted one is shared via a retain.
+Value          em_enum_take(EmberRt *ctx, Value v, int index);
 // Read a NESTED INLINE-STRUCT field of a boxed struct — materialises a fresh OWNED boxed copy
 // (value semantics; the caller drops it). Mirrors the VM's OP_GET_FIELD inline-struct branch.
 Value          em_struct_field_inline(EmberRt *ctx, Value v, int index);

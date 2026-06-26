@@ -96,7 +96,7 @@ couldn't be read.
 
 The samples above assume you already have an `emberc`. Producing one is deliberately dull:
 Ember's compiler is written in C with **no third-party dependencies**, so on any machine with a
-C compiler and `make`, a single command does it.
+C compiler and `make` — **macOS or Linux, on x86-64 or arm64** — a single command does it.
 
 ```
 make
@@ -121,9 +121,11 @@ below, grouped by why you'd reach for it.
 | `make` (`make all`) | `build/emberc` + `libember_rt.a`, `libember_rt_par.a` | The dev build: `-O0 -g`, quick to rebuild and debuggable. The two `.a` files are the runtime `emberc -o` links into native programs. |
 | `make release` | `build/emberc-release` | The optimized `-O2` compiler — the one `make install` ships. |
 | `make parallel` | `build/emberc-par` | Same language, multicore runtime: `spawn`/`nursery`/channels run on real OS threads ([Chapter 14](/guide/ch-14)). |
+| `make mn` | `build/emberc-mn` | The **M:N** green-thread scheduler — many fibers multiplexed onto a few OS threads, with structured cancellation-on-failure. Opt-in while it clears a wider soak ([Chapter 14](/guide/ch-14)). |
 | `make graphics` | `build/emberc-gfx` | Links raylib + FreeType. *Needs an external library* (see below). |
 | `make net` | `build/emberc-net` | Links libcurl for HTTPS. *Needs an external library.* |
 | `make net-graphics` | `build/emberc-net-gfx` | Networking + graphics + threads at once — the build the desktop demo uses. *Needs both libraries.* |
+| `make db` | `build/emberc-db` | Links the vendored SQLite amalgamation so a program can `import "std/sqlite"` ([Chapter 15](/guide/ch-15)). The one C file lives in-tree, so this still needs no system package. |
 
 **Finding bugs**
 
@@ -133,7 +135,7 @@ below, grouped by why you'd reach for it.
 | `make asan-par` | `build/emberc-asan-par` | The same, exercising the cross-thread (parallel) paths. |
 | `make asan-trace` | `build/emberc-trace` | ASan plus the double-drop detector — the "memory tape" of [Chapter 19](/guide/ch-19). |
 
-**Testing, and the three gates**
+**Testing, and the four gates**
 
 | Target | What it does |
 |--------|--------------|
@@ -144,6 +146,7 @@ below, grouped by why you'd reach for it.
 | `make test-parallel` | Correctness suite for programs that are only correct under the multicore runtime. |
 | `make crucible` | The memory-ownership **fuzzer** — generates danger-zone programs and runs each through five oracles ([Chapter 20](/guide/ch-20)). |
 | `make ceilings` | The compiler-**limits** stress tester: pushes constants, locals, fields and the rest past the 256 boundary to prove nothing silently wraps. |
+| `make ledger` | The resource-**linearity** fuzzer: generates `Ptr`-handle programs with a known accept/reject oracle and checks the compiler's must-close-on-every-path verdict matches — catching both a leak that compiles and a balanced program wrongly rejected. |
 | `make opcheck` | *(new)* The bytecode **operand-layer** gate — proves the encoder, decoder, disassembler and VM all agree on every opcode's operand widths, so they can't drift apart. |
 
 **Benchmarks**
@@ -162,16 +165,18 @@ below, grouped by why you'd reach for it.
 | `make install-vscode` | Package and install the VS Code extension globally. Needs Node/npm and VS Code. |
 | `make clean` | Delete `build/`. |
 
-> **The three gates, and why they exist.** `crucible`, `ceilings` and `opcheck` are siblings, each
-> guarding one recurring class of *compiler* bug. Crucible hunts memory-ownership mistakes; ceilings
-> hunts narrow operands that wrap past 255; and the newest, **`opcheck`**, hunts operand-layout
+> **The four gates, and why they exist.** `crucible`, `ceilings`, `ledger` and `opcheck` are siblings,
+> each guarding one recurring class of *compiler* bug. Crucible hunts memory-ownership mistakes;
+> ceilings hunts narrow operands that wrap past 255; ledger hunts a leaked or wrongly-rejected linear
+> `Ptr` handle (the must-close-on-every-path analysis of [Chapter 16](/guide/ch-16)); and
+> **`opcheck`** hunts operand-layout
 > *drift* — the bug where the code that writes an instruction and the code that reads it quietly
 > disagree on how many bytes it occupies. It works in two halves: a codec round-trip that encodes and
 > decodes every operand kind, and a special `-DEMBER_OPCHECK` build of the VM that, after every
 > instruction across the whole test corpus, asserts the handler consumed *exactly* the bytes the
 > opcode's spec declared. Run it after touching any opcode.
 
-**A note on dependencies.** `make`, `make test`, all three gates, the sanitizers and the benchmarks
+**A note on dependencies.** `make`, `make test`, all four gates, the sanitizers and the benchmarks
 need nothing but a C compiler — that is the whole point of writing the compiler in C. Only three
 targets reach outside the standard library: `graphics` (and `test-graphics`) want raylib + FreeType,
 found via `pkg-config`; `net` wants libcurl, via `curl-config`; and `net-graphics` wants both.

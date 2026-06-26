@@ -1,7 +1,11 @@
 # CLAUDE.md — Project Ember
 
 ## Ember coding rules
-- I like to see 5 line spaces between every function/method in a code file
+- Blank lines between functions/methods (OFI-144): **5 blank lines** in comment-sparse pure-Ember code
+  (the stdlib modules like `std/string.em`, `std/json.em`) where the spacing IS the separator; **2 blank
+  lines** where each function already carries its own doc comment — the thin FFI/wrapper modules
+  (`std/http.em`, `std/sqlite.em`), `src/cextern.c`, and per-method container code (`std/slotmap.em`),
+  where the comment is the separator and 5 blanks would just push code off-screen. Match the file you're in.
 - No stubs, no functionless code - we are building a language here and there is no room for this here!
 - OFI - "Opportunity for Improvement" - if you are working on something and find a bug, design flaw, inconsistency 
 with our manifesto etc... Dont ignore or code round it - raise this as an OFI and number it accordingly.  Keep an OFI

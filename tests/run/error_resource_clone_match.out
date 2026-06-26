@@ -1,0 +1,1 @@
+tests/run/error_resource_clone_match.em:11:13: error: cannot move or copy a 'resource' out of a borrow (a 'match' binding or a borrowed parameter) — it would duplicate the owned handle and double-free; read its fields in place, or own it where it is created

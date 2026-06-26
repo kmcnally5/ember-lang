@@ -107,6 +107,13 @@ static TokenType pk(Parser *p) {
 }
 
 
+// pk2 peeks the token AFTER the current one (the token list is EOF-terminated, so this is in-bounds
+// whenever the current token is not EOF). Used to spot a `name:` named argument (IDENT then COLON).
+static TokenType pk2(Parser *p) {
+    return p->toks[p->pos].type == TOK_EOF ? TOK_EOF : p->toks[p->pos + 1].type;
+}
+
+
 
 
 
@@ -298,7 +305,7 @@ static void synchronize(Parser *p) {
 // ---- Node allocators (line/col seeded from the current token). ----
 
 // suffix_code maps an integer-literal width suffix to a small code the checker
-// turns into a type: 1 i8, 2 i16, 3 i32, 4 i64, 5 u8, 6 u16, 7 u32; 0 = unknown.
+// turns into a type: 1 i8, 2 i16, 3 i32, 4 i64, 5 u8, 6 u16, 7 u32, 8 u64; 0 = unknown.
 // (The parser can't name the checker's SemType constants, so it passes a code.)
 static int suffix_code(const char *s, size_t len) {
     if (len == 2 && s[0] == 'i' && s[1] == '8') return 1;
@@ -629,20 +636,34 @@ static Expr *parse_struct_lit(Parser *p, Type *type) {
 
 
 
-// parse_arg_list parses a parenthesised, comma-separated argument list, the
-// opening '(' already consumed. Struct literals are re-enabled inside.
-static Expr **parse_arg_list(Parser *p, size_t *count) {
+// parse_arg_list parses a parenthesised, comma-separated argument list, the opening '(' already
+// consumed. Struct literals are re-enabled inside. An argument may be NAMED — `name: value` (OFI-140),
+// for enum-variant construction — captured into a parallel `*out_names` array (one entry per arg, NULL
+// for a positional arg); `*out_names` stays NULL when no argument was named (the common case). The
+// checker enforces that named arguments are only legal for an enum variant and reorders them.
+static Expr **parse_arg_list(Parser *p, size_t *count, const char ***out_names) {
     int saved = p->no_struct;
     p->no_struct = 0;
 
     Vec args;
+    Vec names;
     vec_init(&args, sizeof(Expr *));
+    vec_init(&names, sizeof(const char *));
+    int any_named = 0;
     skip_newlines(p);
     if (!check(p, TOK_RPAREN)) {
         for (;;) {
             skip_newlines(p);
+            const char *nm = NULL;
+            if (check(p, TOK_IDENT) && pk2(p) == TOK_COLON) {   // a `name:` named argument
+                nm = tok_text(p, adv(p));   // the field name
+                adv(p);                     // the ':'
+                skip_newlines(p);
+                any_named = 1;
+            }
             Expr *a = parse_expression(p);
             vec_push(&args, &a);
+            vec_push(&names, &nm);
             skip_newlines(p);
             if (match(p, TOK_COMMA)) {
                 skip_newlines(p);
@@ -657,7 +678,13 @@ static Expr **parse_arg_list(Parser *p, size_t *count) {
     expect(p, TOK_RPAREN, "expected ')' after arguments");
 
     p->no_struct = saved;
-    return vec_to_arena(p->arena, &args, count);
+    Expr **arr = vec_to_arena(p->arena, &args, count);
+    size_t nc = 0;
+    const char **narr = vec_to_arena(p->arena, &names, &nc);   // also releases the names Vec's buffer
+    if (out_names != NULL) {
+        *out_names = any_named ? narr : NULL;   // only carry names when at least one arg was named
+    }
+    return arr;
 }
 
 
@@ -766,6 +793,7 @@ static void build_string_parts(Parser *p, const Token *strtok, const char *raw,
                 parts[np].text = NULL;
                 parts[np].len  = 0;
                 parts[np].render_kind = 0;   // set by the checker from the hole type
+                parts[np].string_temp = 0;   // set by the checker (owned-temp string hole)
                 np++;
             }
             i = j + 1;
@@ -854,12 +882,18 @@ static Expr *parse_primary(Parser *p) {
             Expr *e = new_expr(p, EXPR_INT);
             const Token *t = adv(p);
             errno = 0;
-            e->as.int_lit = strtoll(t->start, NULL, 10);
+            // Parse the magnitude as UNSIGNED 64-bit so a full-range `u64` literal (up to 2⁶⁴−1)
+            // survives to the checker, which alone knows the literal's TYPE (OFI-123). The bits are
+            // stored in the signed int_lit slot — a magnitude > i64-max lands with the sign bit set,
+            // which the checker reads as "u64-only" (int_fits). The narrower-than-i64 range checks
+            // (and the "not in u64 context" error) are the checker's job, not the parser's. strtoull
+            // stops at the width suffix (e.g. `255u8`); the lexeme carries no sign (`-` is its own token).
+            unsigned long long uv = strtoull(t->start, NULL, 10);
             if (errno == ERANGE) {
-                // The digits overflow i64 (strtoll clamps to LLONG_MAX/MIN). Catch it here,
-                // or the AST silently holds a wrong value the checker then accepts as in-range.
-                error_at(p, t, "integer literal is out of range for i64");
+                // The digits overflow even 64 bits (> 2⁶⁴−1) — no integer type can hold it.
+                error_at(p, t, "integer literal is out of range (larger than u64 / 2^64-1)");
             }
+            e->as.int_lit = (long long)uv;
             // A width suffix follows the digits in the lexeme (e.g. `255u8`).
             size_t i = 0;
             while (i < t->length && t->start[i] >= '0' && t->start[i] <= '9') {
@@ -869,7 +903,7 @@ static Expr *parse_primary(Parser *p) {
                 int code = suffix_code(t->start + i, t->length - i);
                 if (code == 0) {
                     error_at(p, t, "unknown integer width suffix "
-                                   "(use i8/i16/i32/i64/u8/u16/u32)");
+                                   "(use i8/i16/i32/i64/u8/u16/u32/u64)");
                 } else {
                     e->suffix_type = code;
                 }
@@ -1061,7 +1095,9 @@ static Expr *parse_postfix(Parser *p) {
             call->line = e->line;
             call->col  = e->col;
             call->as.call.callee        = e;
-            call->as.call.args          = parse_arg_list(p, &call->as.call.arg_count);
+            call->as.call.arg_names     = NULL;   // set by parse_arg_list iff a `name:` arg appears (OFI-140)
+            call->as.call.args          = parse_arg_list(p, &call->as.call.arg_count,
+                                                         &call->as.call.arg_names);
             call->as.call.witnesses     = NULL;   // set if it is a bounded call
             call->as.call.witness_total = 0;
             call->as.call.resolved_fn   = -1;     // set by the checker for direct calls
@@ -1070,6 +1106,8 @@ static Expr *parse_postfix(Parser *p) {
             call->as.call.box_result    = 1;      // default: box a multi-slot result
             call->as.call.cextern_index = -1;     // set by the checker for an extern "c" call (§5h)
             call->as.call.cextern_ret_sid = -1;   // set by the checker for a struct-returning extern
+            call->as.call.newtype_ctor  = 0;
+            call->as.call.refinement    = NULL;
             e = call;
         } else if (match(p, TOK_LBRACKET)) {
             int saved = p->no_struct;
@@ -1303,6 +1341,7 @@ static Stmt *parse_let(Parser *p, int is_var) {
     s->as.let.is_var = is_var;
     s->as.let.drop_at_scope_end = 0;   // set by the checker once move-state is known
     s->as.let.inline_struct_id = -1;   // checker upgrades for an all-scalar struct binding
+    s->as.let.scalar_kind = -1;        // checker upgrades for a sized numeric binding (OFI-123)
     const Token *name = expect(p, TOK_IDENT, "expected a binding name");
     s->as.let.name = tok_text(p, name);
     s->as.let.type = NULL;
@@ -1545,6 +1584,8 @@ static FnDecl parse_fn(Parser *p, int with_body) {
     FnDecl fn;
     fn.line = cur(p)->line;
     fn.col  = cur(p)->col;
+    fn.src_path = NULL;   // OFI-111a: a normal fn maps to its module via module_of_decl; only a
+                          // lifted lambda overrides this (it lands outside the module ranges).
     fn.doc  = tok_doc(p, cur(p));   // doc rides on the `fn` keyword token
     adv(p); // 'fn'
     const Token *name = expect(p, TOK_IDENT, "expected function name");
@@ -1626,6 +1667,7 @@ static Decl *parse_struct(Parser *p) {
     d->col  = cur(p)->col;
     d->doc  = tok_doc(p, cur(p));
     d->as.struct_.is_rc = 0;   // arena nodes are not zeroed; the `rc` modifier (parse_decl) sets it
+    d->as.struct_.is_resource = 0;   // likewise the `resource` modifier (parse_decl) sets it
     adv(p); // 'struct'
     const Token *name = expect(p, TOK_IDENT, "expected struct name");
     d->as.struct_.name     = tok_text(p, name);
@@ -1859,6 +1901,19 @@ static Decl *parse_decl(Parser *p) {
         }
         return d;
     }
+    // `resource` is likewise a CONTEXTUAL modifier, special only immediately before `struct`:
+    // `resource struct Name { … fn drop(self) { … } }` declares a uniquely-owned, drop-bearing
+    // struct (OFI-122) — the owned dual of `rc`. `resource` stays a valid identifier elsewhere.
+    if (pk(p) == TOK_IDENT &&
+        p->pos + 1 < p->count && p->toks[p->pos + 1].type == TOK_STRUCT &&
+        strcmp(tok_text(p, cur(p)), "resource") == 0) {
+        adv(p);                         // consume the `resource` modifier
+        Decl *d = parse_struct(p);
+        if (d != NULL) {
+            d->as.struct_.is_resource = 1;
+        }
+        return d;
+    }
     switch (pk(p)) {
         case TOK_FN: {
             Decl *d = arena_alloc(p->arena, sizeof(Decl));
@@ -1870,6 +1925,23 @@ static Decl *parse_decl(Parser *p) {
             return d;
         }
         case TOK_STRUCT:    return parse_struct(p);
+        case TOK_TYPE: {
+            // `type UserId = int` — a distinct nominal type over a base (OFI-149).
+            Decl *d = arena_alloc(p->arena, sizeof(Decl));
+            d->kind = DECL_TYPE;
+            d->line = cur(p)->line;
+            d->col  = cur(p)->col;
+            d->doc  = tok_doc(p, cur(p));
+            adv(p);   // consume `type`
+            const Token *name = expect(p, TOK_IDENT, "expected a type name after 'type'");
+            d->as.type_.name = tok_text(p, name);
+            expect(p, TOK_ASSIGN, "expected '=' in a type declaration");
+            d->as.type_.base = parse_type(p);
+            // OFI-150: an optional `where <predicate>` makes this a REFINEMENT type — the predicate
+            // (over `self`) is checked at construction.
+            d->as.type_.refinement = match(p, TOK_WHERE) ? parse_expression(p) : NULL;
+            return d;
+        }
         case TOK_ENUM:      return parse_enum(p);
         case TOK_INTERFACE: return parse_interface(p);
         case TOK_IMPORT:    return parse_import(p);

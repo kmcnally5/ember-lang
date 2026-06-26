@@ -1,3 +1,3 @@
 error[postcondition_failed]: postcondition failed in 'doubled_is_positive' (ensures, line 4)
-  --> tests/run/error_contract_ensures.em:4 (in doubled_is_positive)
+  --> tests/run/error_contract_ensures.em:4:22 (in doubled_is_positive)
   route:  doubled_is_positive (line 4) <- main (line 10)

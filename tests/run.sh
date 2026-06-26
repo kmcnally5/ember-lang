@@ -94,6 +94,10 @@ for dir in "$ROOT"/tests/*/; do
     # dependency-free suite those imports don't resolve. Driven separately by tests/run-net.sh
     # (`make test-net`), whose header already documents net as kept OUT of this suite. (OFI-105)
     [ "$stage" = "net" ] && continue
+    # The db stage needs the -DEMBER_SQLITE vendored-SQLite build (std/sqlite's externs); under this
+    # dependency-free suite those imports don't resolve. Driven separately by tests/run-db.sh
+    # (`make test-db`), whose header documents db as kept OUT of this suite.
+    [ "$stage" = "db" ] && continue
     # The native stage is a DIFFERENTIAL suite (VM vs compiled binary), not a golden
     # comparison — handled in its own block below.
     [ "$stage" = "native" ] && continue
@@ -136,8 +140,10 @@ done
 
 # Tier 1b — native backend differential (docs/architecture.md "Decision: native
 # backend"). Each tests/native/*.em is run BOTH on the bytecode VM and as a binary
-# compiled by `emberc -o`, and their stdout must match — the drift guard that keeps
-# AST→C in lockstep with the reference VM. Skipped under --update (no goldens) and
+# compiled by `emberc -o`, and their STDOUT must match — the drift guard that keeps
+# AST→C in lockstep with the reference VM. (Only stdout: rich structured Faults are the
+# VM's job and go to stderr; native aborts via a bare em_panic by design — OFI-109.)
+# Skipped under --update (no goldens) and
 # if no C compiler is on PATH.
 if [ "$UPDATE" -eq 0 ] && [ -d "$ROOT/tests/native" ] && command -v cc >/dev/null 2>&1; then
     for em in "$ROOT"/tests/native/*.em; do

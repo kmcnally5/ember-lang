@@ -248,15 +248,37 @@ fn provider_label(provider: int) -> string {
 
 
 // send_turn dispatches one request to the ACTIVE provider's worker: Claude gets the Anthropic Messages
-// body (with the app's tool catalogue) on its channel; Ollama gets the OpenAI-compatible chat body (no
-// tools in this MVP) on its own channel. Centralised so the first send, the agentic re-send after a
-// tool result, and Retry can never drift in how they build or route a request.
-fn send_turn(provider: int, anth_ch: Channel<string>, oll_ch: Channel<string>, anth_model: string, ollama_model: string, max_tokens: int, sys: string, turns: [api.Turn]) {
+// body (with the app's tool catalogue) on its channel; Ollama gets the OpenAI-compatible chat body on
+// its own channel — carrying the SAME tools (reshaped to OpenAI form) when `oll_tools` is set, i.e. the
+// selected local model advertised the `tools` capability (OFI-135). Centralised so the first send, the
+// agentic re-send after a tool result, and Retry can never drift in how they build or route a request.
+fn send_turn(provider: int, anth_ch: Channel<string>, oll_ch: Channel<string>, anth_model: string, ollama_model: string, max_tokens: int, sys: string, turns: [api.Turn], oll_tools: bool) {
     if provider == 1 {
-        send(oll_ch, oll.build_request(ollama_model, max_tokens, sys, turns, true))
+        var tools = json.arr([])                             // no tools unless the local model supports them
+        if oll_tools {
+            tools = oll.openai_tools(tool_defs())            // reuse the ONE tool catalogue, reshaped to OpenAI form
+        }
+        send(oll_ch, oll.build_request(ollama_model, max_tokens, sys, turns, true, tools))
     } else {
         send(anth_ch, api.build_request(anth_model, max_tokens, sys, tool_defs(), turns))
     }
+}
+
+
+// list_has reports whether a string list contains a value — used to gate Ollama tool-sending on the
+// selected model being in the discovered tool-capable set (OFI-135).
+fn list_has(xs: [string], x: string) -> bool {
+    var i = 0
+    loop {
+        if i == xs.len() {
+            break
+        }
+        if xs[i] == x {
+            return true
+        }
+        i = i + 1
+    }
+    return false
 }
 
 
@@ -374,13 +396,24 @@ fn user_turn(mut f: flare.Flare, body: string, cw: int) {
 
 
 
-// thinking_turn is the assistant's pre-stream placeholder: the avatar beside a muted "thinking" line with a
-// "- \ | /" spinner animated off the frame counter.
-fn thinking_turn(mut f: flare.Flare, tick: int) {
+// thinking_turn is the assistant's pre-stream placeholder: the avatar beside a muted status line with a
+// "- \ | /" spinner animated off the frame counter. For a LOCAL model (Ollama) the very first send after
+// launch (or after the keep-alive unloads the weights) spends ~10-15s loading the model into the GPU
+// BEFORE any token — so we name that state "Loading <model>…" instead of the generic "thinking", turning
+// a silent GPU-warming wait into a clear one (OFI-137). `provider` 1 = Ollama; `model` is its model id.
+fn thinking_turn(mut f: flare.Flare, tick: int, provider: int, model: string) {
     f.row(flare.START, flare.CENTER)
     f.avatar("*")
     f.strut(8, 0)
-    f.text_muted("Claude is thinking " + flare.spinner(tick))
+    var label = "Claude is thinking "
+    if provider == 1 {
+        if model.len() > 0 {
+            label = "Loading {model} "
+        } else {
+            label = "Loading model "
+        }
+    }
+    f.text_muted(label + flare.spinner(tick))
     f.end()
 }
 
@@ -591,7 +624,9 @@ fn main() -> int {
     var provider = 0
     let ollama_base = oll.default_base()     // honours $OLLAMA_HOST; the Ollama worker is spawned against this
     var ollama_models: [string] = []
+    var ollama_tool_models: [string] = []    // discovered subset that supports OpenAI tools (gates tool-sending, OFI-135)
     var ollama_model = ""
+    var discovering = false                  // an async /api/tags discovery is in flight (OFI-136); drives the picker hint
 
     let suggestions = [
         "Explain a tricky concept simply",
@@ -729,12 +764,9 @@ fn main() -> int {
     }
     f.set_zoom(zoom)
 
-    if provider == 1 {                        // discover local models up front so the picker + send are ready
-        ollama_models = oll.list_models(ollama_base)
-        if ollama_model.len() == 0 && ollama_models.len() > 0 {
-            ollama_model = ollama_models[0]
-        }
-    }
+    // Local-model discovery is ASYNC (OFI-136): kicked off below once the worker fiber exists, drained
+    // each frame — so a down/slow daemon's connect timeout never freezes the render thread the way the
+    // old up-front synchronous /api/tags call could (up to 4s on launch when Ollama wasn't running).
 
     // The ACTIVE conversation's transcript, copied OUT into the flat working array (mutated freely).
     var turns: [api.Turn] = convos[active].turns.clone()   // deep-copy out so the stored conversation array isn't aliased by the mutable working copy
@@ -762,9 +794,16 @@ fn main() -> int {
     let oll_req_ch: Channel<string> = channel(2)         // Ollama's own request channel; both workers share resp_ch/stop_ch
     let resp_ch: Channel<string> = channel(64)
     let stop_ch: Channel<bool> = channel(2)
+    let disco_base_ch: Channel<string> = channel(2)      // model-discovery requests (the Ollama base URL) → the disco worker
+    let disco_resp_ch: Channel<string> = channel(2)      // ...its JSON envelope of installed models comes back here (OFI-136)
     nursery {
     spawn api.stream_worker(api_key, req_ch, resp_ch, stop_ch)
     spawn oll.stream_worker(ollama_base, oll_req_ch, resp_ch, stop_ch)   // the local-model twin; replies multiplex onto resp_ch
+    spawn oll.disco_worker(disco_base_ch, disco_resp_ch)                 // async model discovery, off the render thread (OFI-136)
+    if provider == 1 {                                 // saved provider is Ollama → discover its models now (non-blocking)
+        send(disco_base_ch, ollama_base)
+        discovering = true
+    }
     var prev_down = false                              // mouse-down state last frame, to detect a release
     var dock_snap = json.stringify(dock.to_json())     // last-persisted workspace layout, to detect a change
     var coast = 12                                     // frames to keep free-running after the last activity
@@ -792,7 +831,7 @@ fn main() -> int {
                                 turns.append(api.mk_tool_use(cur_reply, tp_id, tp_name, tp_input))
                                 let result = run_tool(tp_name, tp_input)
                                 turns.append(api.mk_tool_result(tp_id, result))
-                                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
+                                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns, list_has(ollama_tool_models, ollama_model))
                                 cur_reply = ""
                                 tool_pending = false
                                 tp_id = ""
@@ -830,6 +869,21 @@ fn main() -> int {
                     }
                 }
             }
+        }
+
+        // Async model discovery result (OFI-136): when the disco worker's envelope lands, refresh the
+        // picker + the tool-capable subset. Polled every frame (off the render thread), so a down/slow
+        // daemon never stalls a frame; an empty result just leaves the picker empty with a clear hint.
+        match try_recv(disco_resp_ch) {
+            case Some(env) {
+                ollama_models = oll.models_of(env)
+                ollama_tool_models = oll.tool_models_of(env)
+                if ollama_model.len() == 0 && ollama_models.len() > 0 {
+                    ollama_model = ollama_models[0]
+                }
+                discovering = false
+            }
+            case None {}
         }
 
         var want_send = false        // a user message was added this frame → dispatch after layout
@@ -890,7 +944,7 @@ fn main() -> int {
             f.row(flare.START, flare.CENTER)               // keep "Claude" left-aligned (a bare heading centres)
             f.heading("Claude")
             f.end()
-            if f.primary("+ New chat") && !pending {
+            if f.primary_fill("+ New chat") && !pending {   // a block CTA spanning the sidebar (OFI-115 opt-in)
                 new_chat = true
             }
             // Recents: every conversation, switchable. The active one is kept titled live (set above).
@@ -971,7 +1025,7 @@ fn main() -> int {
                     if i == suggestions.len() {
                         break
                     }
-                    if f.button(suggestions[i]) && !pending {
+                    if f.button_fill(suggestions[i]) && !pending {   // stacked full-width starting points (OFI-115 opt-in)
                         turns.append(api.mk_turn(0, suggestions[i]))
                         want_send = true
                         f.scroll_to_bottom("transcript")
@@ -1047,7 +1101,7 @@ fn main() -> int {
                     }
                     let _ = claude_turn(f, cur_reply + caret, cw, "stream", false)
                 } else if pending {
-                    thinking_turn(f, tick)               // waiting for the first delta (animated spinner)
+                    thinking_turn(f, tick, provider, ollama_model)   // pre-first-delta: spinner, or "Loading <model>…" for a cold local model
                 }
             }
             f.page_end()
@@ -1176,18 +1230,18 @@ fn main() -> int {
             if np != provider {
                 provider = np
                 dirty = true
-                if provider == 1 {                          // switched to local → discover installed chat models now
-                    ollama_models = oll.list_models(ollama_base)
-                    if ollama_model.len() == 0 && ollama_models.len() > 0 {
-                        ollama_model = ollama_models[0]
-                    }
+                if provider == 1 {                          // switched to local → discover installed chat models (async)
+                    send(disco_base_ch, ollama_base)
+                    discovering = true
                 }
             }
 
             if provider == 1 {
                 // Ollama: choose from the chat models installed on THIS machine (discovered from the daemon).
                 f.text_muted("Local model")
-                if ollama_models.len() == 0 {
+                if discovering {
+                    f.label("Discovering models " + flare.spinner(tick))
+                } else if ollama_models.len() == 0 {
                     f.label("No models found — run `ollama serve` and `ollama pull <model>`.")
                 } else {
                     var mi = 0
@@ -1204,11 +1258,9 @@ fn main() -> int {
                         mi = mi + 1
                     }
                 }
-                if f.ghost_button("Refresh models") {
-                    ollama_models = oll.list_models(ollama_base)
-                    if ollama_model.len() == 0 && ollama_models.len() > 0 {
-                        ollama_model = ollama_models[0]
-                    }
+                if f.ghost_button("Refresh models") && !discovering {
+                    send(disco_base_ch, ollama_base)        // re-discover (async — no frame stall, OFI-136)
+                    discovering = true
                 }
             } else {
                 f.text_muted("Model")
@@ -1279,7 +1331,7 @@ fn main() -> int {
         // mode CPU burn). A short coast keeps the loop free-running just after activity so a settling spring or
         // the send queued just below (pending flips true next frame) is never cut off; any input/anim/stream
         // re-arms it. had_input() covers mouse AND keyboard, so every shortcut-driven action stays awake too.
-        if had_input() || f.is_animating() || pending {
+        if had_input() || f.is_animating() || pending || discovering {
             coast = 12
         } else if coast > 0 {
             coast = coast - 1
@@ -1292,7 +1344,7 @@ fn main() -> int {
             dirty = true
             let can_send = (provider == 1 && ollama_model.len() > 0) || (provider == 0 && ready)
             if can_send {
-                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
+                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns, list_has(ollama_tool_models, ollama_model))
                 pending = true
             } else if provider == 1 {
                 turns.append(api.mk_turn(1, "No local model selected. Start `ollama serve`, pull a model (e.g. `ollama pull llama3.2`), then choose it in Settings → Provider → Ollama."))
@@ -1336,7 +1388,7 @@ fn main() -> int {
             turns = turns.slice(0, retry_idx)
             let can_retry = (provider == 1 && ollama_model.len() > 0) || (provider == 0 && ready)
             if can_retry {
-                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns)
+                send_turn(provider, req_ch, oll_req_ch, chosen_model(model_idx, use_env, env_model), ollama_model, tokens_for(tok_idx), sys_prompt, turns, list_has(ollama_tool_models, ollama_model))
                 pending = true
             }
             f.scroll_to_bottom("transcript")
@@ -1394,6 +1446,7 @@ fn main() -> int {
     }
     close(req_ch)        // wake the Claude worker out of recv → it returns None and exits
     close(oll_req_ch)    // …and the Ollama worker likewise
+    close(disco_base_ch) // …and the model-discovery worker, else the nursery join deadlocks (OFI-136)
     // M:N safety: tear graphics down on THIS thread (worker 0 — it owns the GL context + the Cocoa
     // main loop) BEFORE the nursery join below. The join parks the main fiber, and under the M:N
     // scheduler it can RESUME on a different worker thread — but raylib/OpenGL teardown (glDeleteTextures

@@ -1,0 +1,1 @@
+tests/run/error_interp_not_showable.em:12:13: error: this value can't be interpolated directly: give its type a 'fn show(self) -> string' method (the Show interface), or interpolate a field or method that yields a number, a string, or a bool

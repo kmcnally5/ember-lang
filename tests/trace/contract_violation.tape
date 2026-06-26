@@ -1,5 +1,5 @@
 error[postcondition_failed]: postcondition failed in 'half' (ensures, line 5)
-  --> tests/trace/contract_violation.em:5 (in half)
+  --> tests/trace/contract_violation.em:5:32 (in half)
   route:  half (line 5) <- main (line 11)
 {"fn":"main","ip":0,"op":"CONST","line":11,"stack":[]}
 {"fn":"main","ip":2,"op":"CALL","line":11,"stack":[7]}

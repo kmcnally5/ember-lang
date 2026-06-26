@@ -32,14 +32,14 @@
 0037    |  POP     
 0038   15  GET_LOCAL 0
 0040    |  CALL     4 1
-0043    |  DROP     0
+0043    |  DROP     2
 0045    |  DROP     1
-0047    |  DROP     2
+0047    |  DROP     0
 0049    |  RETURN  
 0050    |  CONST    2  (= 0)
-0052    |  DROP     0
+0052    |  DROP     2
 0054    |  DROP     1
-0056    |  DROP     2
+0056    |  DROP     0
 0058    |  RETURN  
 == fn Box.replaced (arity 2) ==
 0000    7  GET_LOCAL 1

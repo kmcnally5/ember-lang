@@ -53,6 +53,7 @@ typedef int SemType;
 #define FN_BASE      6000000   //   [FN_BASE, IFACE_BASE)      function type; fntype table
 #define IFACE_BASE   7000000   //   [IFACE_BASE, SLICE_BASE)    interface value type; id = t - IFACE_BASE
 #define SLICE_BASE   8000000   //   [SLICE_BASE, ...)          Slice<T> view; shares the array elem table
+#define NEWTYPE_BASE 9000000   //   [NEWTYPE_BASE, ...)        newtype (OFI-149); id = t - NEWTYPE_BASE; base in c->newtypes[id]
 
 static int is_struct_type(SemType t) {
     return t >= 0 && t < ENUM_BASE;
@@ -63,7 +64,7 @@ static int is_struct_type(SemType t) {
 // array type's, so Slice<T> and [T] share one elem entry. Slices may appear only as a parameter
 // type or an inferred local (escape is forbidden — see the return/field/element checks).
 static int is_slice_type(SemType t) {
-    return t >= SLICE_BASE;
+    return t >= SLICE_BASE && t < NEWTYPE_BASE;
 }
 
 static int is_enum_type(SemType t) {
@@ -108,6 +109,16 @@ static int interface_id_of(SemType t) {
 // "numeric kind" is the byte codegen emits on each arithmetic op so the VM knows
 // the overflow bounds; its ordering matches the VM's bounds table:
 //   0 = i64 (int), 1 = i8, 2 = i16, 3 = i32, 4 = u8, 5 = u16, 6 = u32
+// is_newtype reports whether `t` is a user newtype (`type UserId = int`, OFI-149) — nominally
+// distinct, but with the runtime representation of its base. newtype_id_of indexes c->newtypes.
+static int is_newtype(SemType t) {
+    return t >= NEWTYPE_BASE && t < NEWTYPE_BASE + 1000000;
+}
+
+static int newtype_id_of(SemType t) {
+    return t - NEWTYPE_BASE;
+}
+
 static int is_integer_type(SemType t) {
     return t == TY_INT || t == TY_I8 || t == TY_I16 || t == TY_I32 ||
            t == TY_U8  || t == TY_U16 || t == TY_U32 || t == TY_U64;
@@ -161,16 +172,23 @@ static int array_elem_kind(SemType t) {
     }
 }
 
+// int_fits reports whether an integer LITERAL'S magnitude fits a target type. `v` is the parser's
+// non-negative magnitude held in the int_lit slot (a literal carries no sign — `-n` is unary minus on
+// a non-negative literal). The one exception is a magnitude in (i64-max, u64-max]: it lands with the
+// sign bit set (v < 0), which marks it "u64-only" — representable by no type but `u64` (OFI-123).
 static int int_fits(long long v, SemType t) {
+    if (v < 0) {
+        return t == TY_U64;   // magnitude overflowed the i64 sign bit → fits only u64
+    }
     switch (t) {
-        case TY_I8:  return v >= -128 && v <= 127;
-        case TY_I16: return v >= -32768 && v <= 32767;
-        case TY_I32: return v >= -2147483648LL && v <= 2147483647LL;
-        case TY_U8:  return v >= 0 && v <= 255;
-        case TY_U16: return v >= 0 && v <= 65535;
-        case TY_U32: return v >= 0 && v <= 4294967295LL;
-        case TY_U64: return v >= 0;   // literals up to i64-max; bigger via arithmetic
-        default:     return 1;        // i64 (int): any int64 literal fits
+        case TY_I8:  return v <= 127;
+        case TY_I16: return v <= 32767;
+        case TY_I32: return v <= 2147483647LL;
+        case TY_U8:  return v <= 255;
+        case TY_U16: return v <= 65535;
+        case TY_U32: return v <= 4294967295LL;
+        case TY_U64: return 1;        // any non-negative magnitude ≤ 2⁶⁴−1 (parser-bounded) is a valid u64
+        default:     return 1;        // i64 (int): any non-negative magnitude ≤ i64-max fits
     }
 }
 
@@ -315,6 +333,8 @@ typedef struct {
     int         implements_count;
     int         module;                     // owning module index (for name scoping)
     int         is_rc;                      // `rc struct`: a shared, deeply-immutable refcounted type
+    int         is_resource;                // `resource struct`: a uniquely-owned, drop-bearing type (OFI-122)
+    int         drop_fn;                    // the `drop` method's fn-table index (resource only), else -1
     int         def_line;                   // the struct's source position, for LSP go-to-def
     int         def_col;
 } StructInfo;
@@ -350,6 +370,8 @@ typedef struct {
 typedef struct {
     const char *name;
     SemType     fields[MAX_PARAMS];
+    const char *field_names[MAX_PARAMS];   // the declared payload field names — for NAMED construction
+                                           // `Circle(radius: 2.0)` (OFI-140); positional builds ignore them
     int         field_count;
     int         enum_id;         // which enum (index in c->enums)
     int         variant_index;   // position within that enum
@@ -366,6 +388,20 @@ typedef struct {
     int         def_line;                   // the enum's source position, for LSP go-to-def
     int         def_col;
 } EnumInfo;
+
+// A newtype: a distinct nominal type over a base (`type UserId = int`, OFI-149). Zero runtime
+// cost — a value of this type IS its base value; the SemType is NEWTYPE_BASE + its index here.
+typedef struct {
+    const char *name;
+    SemType     base;             // the erased base type (TY_INT, TY_FLOAT, …)
+    Expr       *refinement;       // OFI-150: the `where` predicate (over `self`), or NULL
+    int         refinement_checked; // OFI-150: predicate type-checked once (lazily, at first construction)
+    int         refinement_in_progress; // OFI-150: this type's predicate is mid-check — a construction
+                                        // of it inside its own predicate is a non-terminating cycle
+    int         module;
+    int         def_line;
+    int         def_col;
+} NewtypeInfo;
 
 // A collected function signature, gathered in pass 1 so that calls (including
 // forward and recursive ones) can be type-checked in pass 2.
@@ -462,6 +498,8 @@ typedef struct {
     int           interface_count;
     EnumInfo    enums[MAX_STRUCTS];
     int         enum_count;
+    NewtypeInfo newtypes[MAX_STRUCTS];   // OFI-149: nominal newtypes (parallel to enums)
+    int         newtype_count;
     GenericInst ginsts[MAX_STRUCTS];
     int         ginst_count;
     // Monomorphized concrete struct instances (Step 2.5): each concrete generic
@@ -480,6 +518,15 @@ typedef struct {
     int          tparam_count;
     int          self_struct;      // struct id when checking a method body (-1 in a free fn):
                                    // a bounded type param's witness then lives in a self field
+    // OFI-122 (resource drop): while checking a `resource struct`'s `drop` body, the carve-out that
+    // lets it CLOSE its own `Ptr` fields + the must-close-every-handle leak scan are active. A handle
+    // field is closed (consumed) only at the TOP LEVEL of drop (scope_depth 0), so the consumed mask
+    // is monotonic — no control-flow merge needed (conditional close is rejected for now).
+    int          in_resource_drop; // 1 while checking a resource drop body, else 0
+    int          drop_self_struct; // the resource struct id whose drop is being checked, else -1
+    int          drop_self_slot;   // the `self` local slot in that drop body, else -1
+    int          drop_self_consumed;  // bitmask of self's Ptr fields already closed (compact ptr-bit)
+    int          drop_self_ptr_mask;  // target: every one of self's Ptr fields must be closed at exit
     int          tparam_bounds[MAX_TYPE_ARGS][MAX_BOUNDS];  // interface ids per type param
     int          tparam_bound_count[MAX_TYPE_ARGS];         // number of bounds per type param
     int          tparam_is_copy[MAX_TYPE_ARGS]; // 1 if the param has the `Copy` bound
@@ -562,7 +609,15 @@ static int is_move_type(Checker *c, SemType t) {
 // by the creating scope AND passed to several spawned tasks at once, so each owner
 // holds a counted reference and the last drop reclaims it (the buffer + its OS
 // primitives). Scalars and arrays do not.
+// newtype_base returns the base (erased) type of a newtype `t` (OFI-149).
+static SemType newtype_base(Checker *c, SemType t) {
+    return c->newtypes[newtype_id_of(t)].base;
+}
+
 static int is_refcounted(Checker *c, SemType t) {
+    if (is_newtype(t)) {   // OFI-149: a newtype is refcounted iff its base is (a string base => yes)
+        return is_refcounted(c, newtype_base(c, t));
+    }
     if (t == TY_STRING || is_enum_type(t) || is_fn_type(t) || is_channel_type(t)) {
         return 1;   // closures + channels are heap objects, shared by reference count
     }
@@ -594,10 +649,14 @@ static int type_is_rc(Checker *c, SemType t) {
 
 // intern_array returns the array type `[elem]`, reusing an existing entry so the
 // same element type always yields the same array-type id.
+static int is_resource_type(Checker *c, SemType t);   // OFI-122 fwd (defined near ptr_storage_error)
 static SemType intern_array(Checker *c, SemType elem) {
     if (elem == TY_PTR) {
         return TY_ERROR;   // OFI-049: a Ptr is a linear FFI handle, never a stored array/slice element.
     }                      // Defensive floor — the annotation/inference sites emit the precise message.
+    if (is_resource_type(c, elem)) {
+        return TY_ERROR;   // OFI-122: a `resource` is uniquely owned (clone = double-drop); never an
+    }                      // array/slice element in Phase 1. Defensive floor; sites emit the message.
     for (int i = 0; i < c->array_count; i++) {
         if (c->arrays[i] == elem) {
             return (SemType)(ARRAY_BASE + i);
@@ -645,6 +704,9 @@ static SemType slice_elem(Checker *c, SemType sl) {
 static SemType intern_channel(Checker *c, SemType elem) {
     if (elem == TY_PTR) {
         return TY_ERROR;   // OFI-049: a Ptr is linear — it cannot ride a (shareable) channel.
+    }
+    if (is_resource_type(c, elem)) {
+        return TY_ERROR;   // OFI-122: a `resource` is uniquely owned; it cannot ride a shareable channel.
     }
     for (int i = 0; i < c->channel_count; i++) {
         if (c->channels[i] == elem) {
@@ -1190,6 +1252,35 @@ static int ptr_storage_error(Checker *c, SemType inner, int line, int col, const
 }
 
 
+// is_resource_type reports whether `t` is a `resource struct` (a uniquely-owned, drop-bearing type).
+// Resources are never generic (R1 bans generic resource structs), so a direct struct check suffices.
+static int is_resource_type(Checker *c, SemType t) {
+    return is_struct_type(t) && c->structs[t].is_resource;
+}
+
+
+// resource_storage_error rejects a `resource` used where it would be CLONED — an array/slice/channel
+// element, a generic STRUCT argument (Box<R>/Map<_,R>), or a field of a non-resource struct (OFI-122).
+// A resource is uniquely owned with a `drop`; duplicating it (a shallow copy of its handle fields)
+// would run drop twice → double-close. Phase 1 keeps a resource in a local, a Result/Option payload,
+// a field of ANOTHER resource, or a return value; collections (pools/caches) are Phase 2. Returns 1
+// (and emits) iff `inner` is a resource. `where` names the offending position.
+static int resource_storage_error(Checker *c, SemType inner, int line, int col, const char *where) {
+    if (!is_resource_type(c, inner)) {
+        return 0;
+    }
+    char msg[220];
+    snprintf(msg, sizeof msg,
+             "a 'resource' is uniquely owned and cannot be %s", where);
+    diag_error(diag_src(c), line, col, msg, NULL,
+               "a 'resource' has a 'drop' that runs once per value — duplicating it would double-free; "
+               "keep it in a local, a Result/Option, a field of another 'resource', or a return value "
+               "(collections come in a later phase)");
+    c->had_error = 1;
+    return 1;
+}
+
+
 // recv_reads_as_copy reports whether reading expression `r` materialises a COPY disconnected from
 // storage (indexing clones the element; an inline value-struct field is boxed as a copy) rather than
 // the live handle. A mutating method whose receiver reads as a copy mutates the copy (OFI-072) —
@@ -1587,6 +1678,61 @@ static int resolve_enum(Checker *c, const char *name) {
 }
 
 
+// resolve_newtype returns the newtype id for a name in the current (or a global) module, or -1.
+static int resolve_newtype(Checker *c, const char *name) {
+    for (int i = 0; i < c->newtype_count; i++) {
+        if ((c->newtypes[i].module == c->current_module ||
+             is_global_module(c->modules, c->newtypes[i].module)) &&
+            strcmp(c->newtypes[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+
+// is_pure_expr (OFI-150): an expression with NO side effects, safe to RE-EVALUATE — a refined
+// newtype's `where` predicate re-reads the constructor argument (as `self`) and the construction
+// also produces it, so the two reads must yield the same value. Conservative: only obviously-pure
+// forms (literals, names, field/index reads, numeric conversions, newtype constructions, and
+// arithmetic/logic over those); a user/method call is impure.
+static int is_pure_expr(Checker *c, const Expr *e) {
+    switch (e->kind) {
+        case EXPR_INT: case EXPR_FLOAT: case EXPR_BOOL: case EXPR_IDENT:
+            return 1;
+        case EXPR_STRING:
+            for (size_t i = 0; i < e->as.str.part_count; i++) {
+                if (e->as.str.parts[i].expr != NULL) {
+                    return 0;   // an interpolation hole may call show()
+                }
+            }
+            return 1;
+        case EXPR_UNARY:
+            return is_pure_expr(c, e->as.unary.operand);
+        case EXPR_BINARY:
+            return is_pure_expr(c, e->as.binary.left) && is_pure_expr(c, e->as.binary.right);
+        case EXPR_GET:
+            return is_pure_expr(c, e->as.get.object);
+        case EXPR_INDEX:
+            return is_pure_expr(c, e->as.index.object) && is_pure_expr(c, e->as.index.index);
+        case EXPR_CALL:
+            if (e->as.call.callee->kind == EXPR_IDENT &&
+                (numeric_typename(e->as.call.callee->as.ident) != TY_ERROR ||
+                 resolve_newtype(c, e->as.call.callee->as.ident) >= 0)) {
+                for (size_t i = 0; i < e->as.call.arg_count; i++) {
+                    if (!is_pure_expr(c, e->as.call.args[i])) {
+                        return 0;
+                    }
+                }
+                return 1;
+            }
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+
 
 
 
@@ -1661,7 +1807,8 @@ static SemType annotation_type(Checker *c, const Type *t) {
     c->allow_slice = 0;
     if (t->kind == TYPE_ARRAY) {
         SemType elem = annotation_type(c, t->as.array.elem);
-        if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "an array element")) {
+        if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "an array element") ||
+            resource_storage_error(c, elem, t->line, t->col, "an array element")) {
             return TY_ERROR;
         }
         return intern_array(c, elem);
@@ -1750,8 +1897,10 @@ static SemType annotation_type(Checker *c, const Type *t) {
         int n = 0;
         for (size_t i = 0; i < t->as.generic.arg_count && n < MAX_TYPE_ARGS; i++) {
             args[n] = annotation_type(c, t->as.generic.args[i]);
-            if (ptr_storage_error(c, args[n], t->line, t->col, "a generic type argument")) {
-                return TY_ERROR;   // OFI-049: no Option<Ptr>/Map<_,Ptr>/Result<Ptr,_> etc.
+            if (ptr_storage_error(c, args[n], t->line, t->col, "a generic type argument") ||
+                (!is_enum &&
+                 resource_storage_error(c, args[n], t->line, t->col, "a generic struct argument"))) {
+                return TY_ERROR;   // OFI-049: no Option<Ptr>/…; OFI-122: no Box<R>/Map<_,R> (R is cloned)
             }
             n++;
         }
@@ -1765,7 +1914,8 @@ static SemType annotation_type(Checker *c, const Type *t) {
                 return TY_ERROR;
             }
             SemType elem = annotation_type(c, t->as.generic.args[0]);
-            if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "a channel element")) {
+            if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "a channel element") ||
+                resource_storage_error(c, elem, t->line, t->col, "a channel element")) {
                 return TY_ERROR;
             }
             return intern_channel(c, elem);
@@ -1784,7 +1934,8 @@ static SemType annotation_type(Checker *c, const Type *t) {
                 return TY_ERROR;
             }
             SemType elem = annotation_type(c, t->as.generic.args[0]);
-            if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "a slice element")) {
+            if (elem == TY_ERROR || ptr_storage_error(c, elem, t->line, t->col, "a slice element") ||
+                resource_storage_error(c, elem, t->line, t->col, "a slice element")) {
                 return TY_ERROR;
             }
             return intern_slice(c, elem);
@@ -1808,8 +1959,10 @@ static SemType annotation_type(Checker *c, const Type *t) {
         int n = 0;
         for (size_t i = 0; i < t->as.generic.arg_count && n < MAX_TYPE_ARGS; i++) {
             args[n] = annotation_type(c, t->as.generic.args[i]);
-            if (ptr_storage_error(c, args[n], t->line, t->col, "a generic type argument")) {
-                return TY_ERROR;   // OFI-049: no Option<Ptr>/Map<_,Ptr>/Result<Ptr,_> etc.
+            if (ptr_storage_error(c, args[n], t->line, t->col, "a generic type argument") ||
+                (!is_enum &&
+                 resource_storage_error(c, args[n], t->line, t->col, "a generic struct argument"))) {
+                return TY_ERROR;   // OFI-049: no Option<Ptr>/…; OFI-122: no Box<R>/Map<_,R> (R is cloned)
             }
             n++;
         }
@@ -1849,6 +2002,10 @@ static SemType annotation_type(Checker *c, const Type *t) {
     if (eid >= 0) {
         sem_record_type(c, t, 1, eid, NULL, NULL);   // LSP: hover/go-to-def on the type name
         return (SemType)(ENUM_BASE + eid);
+    }
+    int ntid = resolve_newtype(c, name);   // OFI-149: a newtype name resolves to its NEWTYPE_BASE id
+    if (ntid >= 0) {
+        return (SemType)(NEWTYPE_BASE + ntid);
     }
     // An interface used as a VALUE type (dynamic dispatch). Only object-safe
     // interfaces qualify: a method that mentions `Self` beyond the receiver can't be
@@ -2015,6 +2172,92 @@ static int struct_implements(Checker *c, int struct_id, int iface_id);     // be
 static int method_is_interface_impl(Checker *c, int struct_id, const char *name); // below
 static int resolve_interface_id(Checker *c, const char *name);             // below
 
+// resolve_named_args handles NAMED enum-variant construction `Circle(radius: 2.0)` (OFI-140). If the
+// call carries argument names (parser set `arg_names`), it must be CONSTRUCTING an enum variant — a
+// bare-identifier or module-qualified callee that resolves to a variant; anything else is an error.
+// On a valid variant it matches each `name: value` to the declared field by name (rejecting a misspelled
+// name, a duplicate, a missing field, or a mix of positional + named), REORDERS `args` into declared
+// field order, and clears `arg_names` — so every downstream consumer (infer_variant_type, both codegen
+// backends) sees a plain positional construction, exactly as `Circle(2.0)`. A no-op for a positional call.
+static void resolve_named_args(Checker *c, Expr *e) {
+    if (e->as.call.arg_names == NULL) {
+        return;   // positional fast path — the overwhelming common case
+    }
+    const Expr *callee = e->as.call.callee;
+    VariantInfo *v = NULL;
+    if (callee->kind == EXPR_IDENT) {
+        v = resolve_variant(c, callee->as.ident);
+    } else if (callee->kind == EXPR_GET && callee->as.get.object->kind == EXPR_IDENT) {
+        // A qualified callee: an import-ALIAS `mod.Variant(...)`, or a local ENUM-NAME `Enum.Variant(...)`.
+        // The positional path resolves both (the latter via resolve_enum/enum_variant, check.c ~3659), so
+        // named construction must too, or `Shape.Circle(radius: 2.0)` / `Option.Some(value: 5)` over-reject.
+        v = resolve_qualified_variant(c, callee->as.get.object->as.ident, callee->as.get.name);
+        if (v == NULL) {
+            int veid = resolve_enum(c, callee->as.get.object->as.ident);
+            if (veid >= 0) {
+                v = enum_variant(c, veid, callee->as.get.name);
+            }
+        }
+    }
+    if (v == NULL) {
+        type_error(c, e->line, e->col,
+                   "named arguments ('name: value') are only valid when constructing an enum variant; "
+                   "function and method calls pass their arguments positionally");
+        e->as.call.arg_names = NULL;   // proceed positionally so further checking still runs
+        return;
+    }
+    int argc = (int)e->as.call.arg_count;
+    if (argc != v->field_count) {
+        type_error(c, e->line, e->col,
+                   "named construction must set each of the variant's fields exactly once");
+        e->as.call.arg_names = NULL;
+        return;
+    }
+    Expr *reordered[MAX_PARAMS];
+    int   seen[MAX_PARAMS];
+    for (int k = 0; k < v->field_count; k++) {
+        reordered[k] = NULL;
+        seen[k] = 0;
+    }
+    for (int i = 0; i < argc; i++) {
+        const char *nm = e->as.call.arg_names[i];
+        if (nm == NULL) {
+            type_error(c, e->line, e->col,
+                       "construction cannot mix positional and named arguments — name every field, or none");
+            e->as.call.arg_names = NULL;
+            return;
+        }
+        int slot = -1;
+        for (int k = 0; k < v->field_count; k++) {
+            if (v->field_names[k] != NULL && strcmp(v->field_names[k], nm) == 0) {
+                slot = k;
+                break;
+            }
+        }
+        if (slot < 0) {
+            char buf[160];
+            snprintf(buf, sizeof buf, "this variant has no field named '%s'", nm);
+            type_error(c, e->line, e->col, buf);
+            e->as.call.arg_names = NULL;
+            return;
+        }
+        if (seen[slot]) {
+            char buf[160];
+            snprintf(buf, sizeof buf, "field '%s' is set more than once", nm);
+            type_error(c, e->line, e->col, buf);
+            e->as.call.arg_names = NULL;
+            return;
+        }
+        seen[slot] = 1;
+        reordered[slot] = e->as.call.args[i];
+    }
+    for (int k = 0; k < v->field_count; k++) {
+        e->as.call.args[k] = reordered[k];   // now in declared field order
+    }
+    e->as.call.arg_names = NULL;             // positional from here on
+}
+
+
 // infer_variant_type type-checks a variant construction and returns its enum
 // type. For a non-generic enum that is the enum id; for a generic enum it infers
 // the type arguments — from the expected type (a `let`/`return` annotation) and
@@ -2158,8 +2401,8 @@ static int nested_inline_sid(Checker *c, SemType t) {
     if (!is_struct_type(t)) {
         return -1;
     }
-    if (c->structs[t].is_rc) {
-        return -1;   // R2: an rc struct is boxed + refcounted, never packed inline by value
+    if (c->structs[t].is_rc || c->structs[t].is_resource) {
+        return -1;   // an rc OR resource struct is boxed (refcounted / drop-bearing), never packed inline
     }
     StructInfo *si = &c->structs[t];
     if (si->field_count == 0) {
@@ -2189,8 +2432,8 @@ static int array_inline_struct_id(Checker *c, SemType elem) {
     if (!is_struct_type(elem)) {
         return -1;
     }
-    if (c->structs[elem].is_rc) {
-        return -1;   // R2: [RcT] stores boxed AEK_BOXED elements (retained on copy), not inline
+    if (c->structs[elem].is_rc || c->structs[elem].is_resource) {
+        return -1;   // an rc/resource element is boxed (retained / drop-bearing), never inline-packed
     }
     StructInfo *si = &c->structs[elem];
     int total = 0;
@@ -2221,8 +2464,8 @@ static int struct_all_scalar_id(Checker *c, SemType t) {
     if (!is_struct_type(t)) {
         return -1;
     }
-    if (c->structs[t].is_rc) {
-        return -1;   // R2: an rc struct stays boxed + refcounted, never multi-slot on the stack
+    if (c->structs[t].is_rc || c->structs[t].is_resource) {
+        return -1;   // an rc/resource struct stays boxed, never multi-slot on the stack
     }
     StructInfo *si = &c->structs[t];
     if (si->field_count == 0) {
@@ -2293,6 +2536,32 @@ static int is_multislot_local(Checker *c, Expr *e) {
 // use is then an error); moving a value *out of a field* is a partial move, which
 // is not supported. Copy types and fresh temporaries are unaffected. Returns
 // whether the consumed value is owned, so the receiving binding inherits it. Call
+// drop_self_ptr_field_bit returns the compact ptr-bit (0,1,2,…) if `e` reads a `Ptr` FIELD of the
+// drop's own `self` (only meaningful inside a resource drop), else -1. The bit indexes self's Ptr
+// fields in declaration order — its position in the drop_self_consumed / drop_self_ptr_mask masks.
+static int drop_self_ptr_field_bit(Checker *c, Expr *e) {
+    if (!c->in_resource_drop || c->drop_self_slot < 0 || e->kind != EXPR_GET) {
+        return -1;
+    }
+    Expr *obj = e->as.get.object;
+    if (obj->kind != EXPR_IDENT || resolve_local(c, obj->as.ident) != c->drop_self_slot) {
+        return -1;
+    }
+    StructInfo *si = &c->structs[c->drop_self_struct];
+    int bit = 0;
+    for (int f = 0; f < si->field_count; f++) {
+        if (si->fields[f].type != TY_PTR) {
+            continue;
+        }
+        if (strcmp(si->fields[f].name, e->as.get.name) == 0) {
+            return bit < 31 ? bit : -1;
+        }
+        bit++;
+    }
+    return -1;   // not a Ptr field of self
+}
+
+
 // it *after* type-checking the expression (so reads are seen while still live).
 static int consume(Checker *c, Expr *e, SemType t, int line, int col) {
     if (is_refcounted(c, t) || is_type_param(t)) {
@@ -2344,6 +2613,15 @@ static int consume(Checker *c, Expr *e, SemType t, int line, int col) {
     if (e->kind == EXPR_IDENT) {
         int slot = resolve_local(c, e->as.ident);
         if (slot >= 0) {
+            // OFI-122 R4: inside a `resource` drop, `self` may not be moved or copied as a WHOLE —
+            // handing its handle fields to a new owner whose drop re-closes them is a double free.
+            // Close its fields in place; the runtime reclaims `self` after drop returns.
+            if (c->in_resource_drop && slot == c->drop_self_slot) {
+                type_error(c, line, col,
+                           "cannot move or copy 'self' inside 'drop'; close its handle fields and let "
+                           "the runtime reclaim 'self' (moving it would re-run drop)");
+                return 0;
+            }
             // A multi-slot struct local read as a value is COPIED (boxed from its slots),
             // not moved — the source stays valid, the copy is a fresh owned temporary.
             if (is_multislot_local(c, e)) {
@@ -2376,6 +2654,17 @@ static int consume(Checker *c, Expr *e, SemType t, int line, int col) {
                                "ownership (declare the parameter 'move f: Ptr', not 'f' or 'mut f')");
                     return 0;
                 }
+                if (is_resource_type(c, t)) {
+                    // OFI-122 R2: a BORROWED resource (a `match` case binding, a borrowed param) may not
+                    // be moved/copied into an owner — the clone-on-bind path would shallow-copy its handle
+                    // fields, giving two owners that each run `drop` (double-close). Read its fields in
+                    // place, or own it where it is constructed.
+                    type_error(c, line, col,
+                               "cannot move or copy a 'resource' out of a borrow (a 'match' binding or a "
+                               "borrowed parameter) — it would duplicate the owned handle and double-free; "
+                               "read its fields in place, or own it where it is created");
+                    return 0;
+                }
                 e->moves_local = 2;
                 return 1;
             }
@@ -2392,6 +2681,32 @@ static int consume(Checker *c, Expr *e, SemType t, int line, int col) {
         return 1;                       // a bare variant constructor, etc.
     }
     if (e->kind == EXPR_GET) {
+        if (t == TY_PTR) {
+            // OFI-122 R6/R5p1: a linear `Ptr` field. The ONE place it may be CLOSED (consumed) is the
+            // resource's own `drop`, at the TOP LEVEL of the body (so the consumed mask is monotonic —
+            // no control-flow merge). Inside a nested block of drop, or anywhere else, a `Ptr` field is
+            // borrow-only — closing it elsewhere (or twice) would double-close the live handle.
+            int fbit = drop_self_ptr_field_bit(c, e);
+            if (fbit >= 0 && c->scope_depth == 0) {
+                if (c->drop_self_consumed & (1 << fbit)) {
+                    type_error(c, line, col,
+                               "this 'resource' handle field was already closed on this path");
+                    return 0;
+                }
+                c->drop_self_consumed |= (1 << fbit);
+                return 1;   // legal: the drop closes its own resource handle exactly once
+            }
+            if (fbit >= 0) {
+                type_error(c, line, col,
+                           "close a 'resource' handle field at the TOP LEVEL of 'drop' (conditional "
+                           "close is not supported yet); close it unconditionally");
+                return 0;
+            }
+            type_error(c, line, col,
+                       "cannot close or move a 'Ptr' field out of a struct (it is borrow-only); only "
+                       "a 'resource' struct's own 'drop' may close its handle fields");
+            return 0;
+        }
         // An INLINE nested struct field is a value type: reading it out materialises a fresh
         // COPY of its packed bytes, so binding it out is fine (OFI-031). A BOXED struct field
         // is a unique-owner pointer, so moving it out is a partial move — still rejected.
@@ -2474,6 +2789,119 @@ static SemType check_expr(Checker *c, Expr *e);
 static void report_unconsumed_ptrs(Checker *c, int from, int line, int col);   // OFI-049 leak scan
 
 
+// ---- Show: string-interpolation rendering (OFI-139) ----
+
+// show_renders reports whether a value of type `t` provides the Show contract — a
+// `fn show(self) -> string` (a plain borrow `self`, no explicit params). Detection is
+// STRUCTURAL (the method's presence is the opt-in, like Go's Stringer), so a struct need
+// not `implements Show` to be interpolated. For an interface VALUE it is the interface's
+// own `show` slot (dynamic dispatch reads it from the vtable). On a match it reports the
+// dispatch target: `*dyn_slot` >= 0 for an interface value (else -1), or `*fn_index` >= 0
+// for a concrete/generic struct method (else -1).
+static int show_renders(Checker *c, SemType t, int *dyn_slot, int *fn_index) {
+    *dyn_slot  = -1;
+    *fn_index  = -1;
+    if (is_interface_type(t)) {
+        InterfaceInfo *ii = &c->interfaces[interface_id_of(t)];
+        for (int m = 0; m < ii->method_count; m++) {
+            MethodSig *ms = &ii->methods[m];
+            if (strcmp(ms->name, "show") == 0 &&
+                ms->param_count == 0 && ms->ret == TY_STRING) {
+                *dyn_slot = m;
+                return 1;
+            }
+        }
+        return 0;
+    }
+    int base = -1;
+    if (is_struct_type(t)) {
+        base = t;
+    } else if (is_generic_inst(t) && !c->ginsts[t - GENERIC_BASE].is_enum) {
+        base = c->ginsts[t - GENERIC_BASE].base;
+    }
+    if (base < 0) {
+        return 0;
+    }
+    MethodInfo *mi = resolve_method(c, base, "show");
+    if (mi == NULL || mi->param_count != 0 || mi->ret != TY_STRING ||
+        mi->self_qual != OWN_NONE) {
+        return 0;
+    }
+    *fn_index = mi->fn_index;
+    return 1;
+}
+
+
+// synth_show_call wraps an already-checked interpolation receiver `recv` (of type
+// `recv_ty`, which show_renders has accepted) into a synthesized `recv.show()` method
+// call, so the hole flows through the ordinary method-call codegen on BOTH backends and
+// renders as the resulting string. Every node field is set explicitly — arena nodes are
+// not zeroed, and a stray `variant_enum_id`/`resolved_fn` would misroute codegen.
+static Expr *synth_show_call(Checker *c, Expr *recv, SemType recv_ty,
+                             int dyn_slot, int fn_index) {
+    Expr *get = arena_alloc(c->arena, sizeof(Expr));
+    get->kind                 = EXPR_GET;
+    get->line                 = recv->line;
+    get->col                  = recv->col;
+    get->moves_local          = 0;
+    get->suffix_type          = 0;
+    get->num_kind             = 0;
+    get->variant_enum_id      = -1;
+    get->variant_tag          = -1;
+    get->coerce_witness       = NULL;
+    get->coerce_witness_count = 0;
+    get->coerce_iface         = 0;
+    get->as.get.object        = recv;
+    get->as.get.name          = "show";
+    get->as.get.name_line     = recv->line;
+    get->as.get.name_col      = recv->col;
+    get->as.get.field_index   = fn_index;   // -1 for the interface (dyn) path
+    get->as.get.bound_method  = -1;
+    get->as.get.bound_witness = 0;
+    get->as.get.bound_via_self = 0;
+    get->as.get.dyn_method    = dyn_slot;   // -1 for the concrete-struct path
+    get->as.get.array_op      = ARR_OP_NONE;
+    get->as.get.string_op     = 0;
+    get->as.get.clone_op      = 0;
+    get->as.get.drop_object   = 0;
+    get->as.get.inline_field  = 0;
+    get->as.get.inline_struct_id = -1;
+
+    Expr *call = arena_alloc(c->arena, sizeof(Expr));
+    call->kind                 = EXPR_CALL;
+    call->line                 = recv->line;
+    call->col                  = recv->col;
+    call->moves_local          = 0;
+    call->suffix_type          = 0;
+    call->num_kind             = 0;
+    call->variant_enum_id      = -1;
+    call->variant_tag          = -1;
+    call->coerce_witness       = NULL;
+    call->coerce_witness_count = 0;
+    call->coerce_iface         = 0;
+    call->as.call.callee       = get;
+    call->as.call.args         = NULL;
+    call->as.call.arg_count    = 0;
+    call->as.call.arg_names    = NULL;   // not named construction (OFI-140); arena nodes aren't zeroed
+    call->as.call.witnesses    = NULL;
+    call->as.call.witness_total = 0;
+    call->as.call.resolved_fn  = -1;
+    call->as.call.mono_arg_count = 0;
+    call->as.call.closure_call = 0;
+    // A fresh owned struct temporary receiver (`"{make_circle()}"`) is borrowed by show()
+    // and must be caller-dropped (OFI-027), exactly as the normal method path sets it. An
+    // interface value is dispatched dynamically (self borrowed, never dropped here).
+    call->as.call.drop_first   = (dyn_slot < 0) && is_owning_temp(c, recv, recv_ty);
+    call->as.call.drop_mask    = 0;
+    call->as.call.arg_inline_struct = NULL;
+    call->as.call.ret_struct_id = -1;   // show() returns a string, never multi-slot
+    call->as.call.box_result   = 0;
+    call->as.call.cextern_index = -1;
+    call->as.call.cextern_ret_sid = -1;
+    return call;
+}
+
+
 // ---- Top-level constants (OFI-023) ----
 
 // is_const_literal reports whether `e` is a literal usable as a top-level constant:
@@ -2515,7 +2943,28 @@ static void collect_global(Checker *c, const Decl *d) {
         type_error(c, d->line, d->col, "too many top-level constants");
         return;
     }
+    // A declared annotation becomes the EXPECTED type so a literal adopts it (`let Z: u8 = 5` makes `5`
+    // a u8, `let F: f32 = 1.5` an f32) — then the value must match it. Mirrors the function-local
+    // STMT_LET path (this top-level path used to skip the annotation check entirely, OFI-147).
+    SemType at = d->as.let.type != NULL ? annotation_type(c, d->as.let.type) : TY_ERROR;
+    SemType saved = c->expected;
+    c->expected = at;
     SemType t = check_expr(c, d->as.let.value);
+    c->expected = saved;
+    if (d->as.let.type != NULL) {
+        if (at == TY_ERROR) {
+            type_error(c, d->line, d->col, "unknown or unsupported type in binding annotation");
+        } else if (t != TY_ERROR && !assignable(c, d->as.let.value, t, at)) {
+            type_error(c, d->line, d->col, "binding annotation does not match the value's type");
+        } else {
+            t = at;   // the declared type wins
+        }
+    }
+    if (d->as.let.name[0] == '_' && d->as.let.name[1] == '\0') {
+        // A module-scope DISCARD: `let _ = <literal>` checks the value (for errors) but binds no name,
+        // exactly like a function-local `_` (OFI-098). So `_` never resolves to a usable global.
+        return;
+    }
     int g = c->global_count++;
     c->globals[g].name     = d->as.let.name;
     c->globals[g].module   = c->current_module;
@@ -2882,6 +3331,16 @@ static SemType check_fn_call(Checker *c, Expr *e, FnSig *sig, SemType expected) 
         if (bound[k] && bind[k] == TY_PTR) {
             ptr_storage_error(c, bind[k], e->line, e->col, "a generic type argument");
         }
+        // OFI-122: a `resource` flows into an erased generic body the move/clone checker can't re-check
+        // at T = R, so it could be cloned or sunk un-tracked (double free) — e.g. `fn f<T>(x){ [x] }`
+        // would build `[R]` at T = R. Forbid a resource as a generic-fn argument for EVERY parameter
+        // (Phase 1: use a resource concretely, not through generics). Enum construction is a separate
+        // path (it allows a resource payload — Result<R>/Option<R> — so this never blocks `Ok(db)`).
+        if (is_resource_type(c, bind[k])) {
+            type_error(c, e->line, e->col,
+                       "a 'resource' cannot be a generic type argument — under erasure the body is "
+                       "checked once and could clone or leak it (double free); use it concretely");
+        }
         SemType arg = bind[k];
         for (int b = 0; b < sig->bound_count[k]; b++) {
             int iid = sig->bounds[k][b];
@@ -2941,8 +3400,15 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                 t = expected;
             }
             if (!int_fits(e->as.int_lit, t)) {
-                type_error(c, e->line, e->col,
-                           "integer literal is out of range for its type");
+                if (e->as.int_lit < 0 && t != TY_U64) {
+                    // A magnitude in (i64-max, u64-max] reached here in a non-u64 context.
+                    type_error(c, e->line, e->col,
+                               "this integer literal exceeds the i64 range; only 'u64' can hold it "
+                               "(annotate the binding 'u64', or add the 'u64' suffix)");
+                } else {
+                    type_error(c, e->line, e->col,
+                               "integer literal is out of range for its type");
+                }
             }
             return t;
         }
@@ -3027,14 +3493,21 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     e->num_kind = int_kind(l);   // width-aware overflow / f32 rounding
                     return l;
                 }
+                if (is_newtype(l) || is_newtype(r)) {   // OFI-149: arithmetic needs an explicit unwrap
+                    type_error(c, e->line, e->col,
+                               "arithmetic on a newtype requires unwrapping to its base first "
+                               "(e.g. `int(x)`), then re-wrapping the result");
+                    return TY_ERROR;
+                }
                 type_error(c, e->line, e->col,
                            "arithmetic operands must be the same numeric type "
                            "(or both string for '+')");
                 return TY_ERROR;
             }
             if (is_relational_op(op)) {
-                if (is_numeric_type(l) && l == r) {
-                    e->num_kind = int_kind(l);   // u64 compares unsigned
+                SemType lb = is_newtype(l) ? newtype_base(c, l) : l;   // OFI-149: compare via the base
+                if (is_numeric_type(lb) && l == r) {
+                    e->num_kind = int_kind(lb);   // u64 compares unsigned
                     return TY_BOOL;
                 }
                 type_error(c, e->line, e->col,
@@ -3042,10 +3515,12 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                 return TY_ERROR;
             }
             if (is_equality_op(op)) {
-                // No coercion: the two sides must be the same comparable type.
+                // No coercion: the two sides must be the same comparable type. A newtype compares
+                // via its base (OFI-149), same-newtype only (l == r) — never against the raw base.
+                SemType lb = is_newtype(l) ? newtype_base(c, l) : l;
                 if (l == r &&
-                    (is_integer_type(l) || l == TY_BOOL || l == TY_FLOAT ||
-                     l == TY_STRING)) {
+                    (is_integer_type(lb) || lb == TY_BOOL || lb == TY_FLOAT ||
+                     lb == TY_STRING)) {
                     return TY_BOOL;
                 }
                 type_error(c, e->line, e->col,
@@ -3180,6 +3655,10 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
 
         case EXPR_CALL: {
             Expr *callee = e->as.call.callee;
+            // NAMED enum-variant construction `Circle(radius: 2.0)` → validate + reorder into declared
+            // field order (then it is positional from here, like `Circle(2.0)`); a non-variant call with
+            // named args errors here (OFI-140). A no-op when no argument was named (the common case).
+            resolve_named_args(c, e);
             int argc = (int)e->as.call.arg_count;
 
             // A call through a function *value*: the callee evaluates to a function
@@ -3859,6 +4338,14 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     }
                     e->as.call.ret_struct_id = ret_multislot_sid(c, mi->ret, 0);
                 }
+                // A `move self` method CONSUMES the receiver (it takes ownership): mark it moved, so it
+                // can't be used after the call and its scope-exit auto-drop becomes a no-op (codegen nils
+                // the slot). Without this a `move self` call left the receiver live → use-after-move +
+                // double-drop — latent for value structs, CRITICAL for a `resource` whose drop runs user
+                // cleanup (the OFI-145 / R5-HOLE-B fix; prerequisite for OFI-122 resource structs).
+                if (mi->self_qual == OWN_MOVE) {
+                    consume(c, callee->as.get.object, ot, e->line, e->col);
+                }
                 // A fresh owned struct temporary as the receiver, borrowed by the method
                 // (self is not `move`), must be dropped after the call or it leaks
                 // (OFI-027). The receiver is pushed first, so OP_DROP_UNDER reclaims it.
@@ -4228,9 +4715,10 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     SemType at = argc >= 1 ? check_expr(c, e->as.call.args[0])
                                            : TY_ERROR;
                     int want_float = is_float_type(target);
+                    SemType at_repr = is_newtype(at) ? newtype_base(c, at) : at;   // OFI-149: unwrap a newtype
                     if (at != TY_ERROR &&
-                        ((want_float && !is_float_type(at)) ||
-                         (!want_float && !is_integer_type(at)))) {
+                        ((want_float && !is_float_type(at_repr)) ||
+                         (!want_float && !is_integer_type(at_repr)))) {
                         type_error(c, e->line, e->col,
                                    want_float
                                        ? "a float width conversion's argument must "
@@ -4241,6 +4729,96 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     }
                     e->num_kind = int_kind(target);   // codegen: target kind
                     return target;
+                }
+            }
+
+            // Newtype construction: `UserId(x)` wraps a base value in a distinct nominal type
+            // (OFI-149). The argument must match the newtype's base; the result IS the base value
+            // at runtime (codegen passthrough), so construction is zero-cost.
+            if (callee->kind == EXPR_IDENT) {
+                int ntid = resolve_newtype(c, callee->as.ident);
+                if (ntid >= 0) {
+                    SemType base = c->newtypes[ntid].base;
+                    if (argc != 1) {
+                        type_error(c, e->line, e->col,
+                                   "a newtype constructor takes exactly one argument");
+                    }
+                    SemType saved_exp = c->expected;
+                    c->expected = base;   // a literal arg adopts the base width (Small(200), Big(...))
+                    SemType at = argc >= 1 ? check_expr(c, e->as.call.args[0]) : TY_ERROR;
+                    c->expected = saved_exp;
+                    if (at != TY_ERROR && !assignable(c, e->as.call.args[0], at, base)) {
+                        type_error(c, e->line, e->col,
+                                   "a newtype constructor's argument must have the newtype's base type");
+                    }
+                    // OFI-149: construction is codegen-passthrough (the value IS the base value).
+                    // For a refcounted base (a string newtype) the argument is therefore aliased
+                    // straight into the new owner, so it must be consumed/retained exactly as a
+                    // plain copy would be — else an existing-owner source (`Email(s)`) underflows
+                    // its refcount and double-frees. A fresh temporary arg (literal/call) is left
+                    // alone by consume(), so no double-retain.
+                    if (at != TY_ERROR) {
+                        consume(c, e->as.call.args[0], base, e->line, e->col);
+                    }
+                    e->as.call.newtype_ctor = 1;
+                    // OFI-150: a refined newtype (`type Percent = int where P`) checks P at
+                    // construction. Type-check the predicate ONCE (lazily, in full body-checking
+                    // context so it may call predicate fns), binding `self` to the base; codegen
+                    // then emits the check per construction site (debug-checked, release-elided).
+                    {
+                        NewtypeInfo *ni = &c->newtypes[ntid];
+                        if (ni->refinement != NULL && ni->refinement_in_progress) {
+                            // OFI-150: this type is being CONSTRUCTED inside its OWN `where`
+                            // predicate — checking it would require checking it, a
+                            // non-terminating cycle (and an infinite codegen recursion / crash
+                            // if left to emit). Reject it and leave this call's refinement NULL
+                            // so codegen emits no check.
+                            type_error(c, e->line, e->col,
+                                       "a newtype's 'where' predicate cannot construct its own type "
+                                       "(the refinement would never terminate)");
+                            return (SemType)(NEWTYPE_BASE + ntid);
+                        }
+                        if (ni->refinement != NULL) {
+                            if (argc >= 1 && !is_pure_expr(c, e->as.call.args[0])) {
+                                type_error(c, e->line, e->col,
+                                           "a refined newtype's constructor argument must be a simple "
+                                           "expression (a literal, variable, field, conversion, or "
+                                           "arithmetic) so the predicate checks the value that is "
+                                           "stored — bind a computed value to a `let` first");
+                            }
+                            if (!ni->refinement_checked) {
+                                ni->refinement_checked = 1;
+                                ni->refinement_in_progress = 1;
+                                // OFI-150: the predicate is over `self` ONLY. Check it in an
+                                // ISOLATED local scope — HIDE the ambient locals by zeroing
+                                // local_count for the duration (notably a method receiver also
+                                // named `self`, which would otherwise make declare_local report a
+                                // bogus "redeclaration" and bind the predicate's `self` to the
+                                // receiver). This makes the one-time check independent of WHERE
+                                // the type is first constructed. The ambient locals are restored
+                                // verbatim afterward (they were never modified — local_count is
+                                // an index, the entries above it survive).
+                                int saved = c->local_count;
+                                // Preserve the entry declare_local will overwrite at index 0
+                                // (e.g. the ambient receiver `self`), then restore it verbatim.
+                                Local saved_slot0 = (saved > 0) ? c->locals[0] : (Local){0};
+                                c->local_count = 0;
+                                declare_local(c, e->line, e->col, "self", 0, base, 0);
+                                SemType pt = check_expr(c, ni->refinement);
+                                c->local_count = saved;
+                                if (saved > 0) {
+                                    c->locals[0] = saved_slot0;
+                                }
+                                ni->refinement_in_progress = 0;
+                                if (pt != TY_BOOL && pt != TY_ERROR) {
+                                    type_error(c, e->line, e->col,
+                                               "a newtype's 'where' predicate must be a bool expression over 'self'");
+                                }
+                            }
+                            e->as.call.refinement = ni->refinement;
+                        }
+                    }
+                    return (SemType)(NEWTYPE_BASE + ntid);
                 }
             }
 
@@ -4659,13 +5237,36 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     continue;
                 }
                 SemType pt = check_expr(c, part->expr);
-                if (pt != TY_ERROR && pt != TY_BOOL && !is_numeric_type(pt) && pt != TY_STRING) {
-                    type_error(c, e->line, e->col,
-                               "an interpolation '{ }' accepts a number, a string, or a bool");
+                // OFI-149: a newtype renders as its base (`"{userId}"` shows the int, `"{email}"`
+                // the string), so the directly-printable test + render kind use the base type.
+                SemType prt = is_newtype(pt) ? newtype_base(c, pt) : pt;
+                if (prt != TY_ERROR && prt != TY_BOOL && !is_numeric_type(prt) && prt != TY_STRING) {
+                    // A value type that provides Show (`fn show(self) -> string`) renders by
+                    // desugaring the hole to `value.show()` (OFI-139): the wrapped call is an
+                    // ordinary string-typed hole from here on, so codegen + ownership on BOTH
+                    // backends are unchanged. Otherwise the value is not directly printable.
+                    int dyn_slot, fn_index;
+                    if (show_renders(c, prt, &dyn_slot, &fn_index)) {
+                        part->expr = synth_show_call(c, part->expr, prt, dyn_slot, fn_index);
+                        prt = TY_STRING;
+                        pt  = TY_STRING;
+                    } else {
+                        type_error(c, e->line, e->col,
+                                   "this value can't be interpolated directly: give its type a "
+                                   "'fn show(self) -> string' method (the Show interface), or "
+                                   "interpolate a field or method that yields a number, a string, "
+                                   "or a bool");
+                    }
                 }
                 // u64 holes render unsigned; a bool renders true/false (kind 10, set only here so
-                // int_kind stays purely numeric for arithmetic/compare num_kind).
-                part->render_kind = (pt == TY_BOOL) ? 10 : int_kind(pt);
+                // int_kind stays purely numeric for arithmetic/compare num_kind). A desugared Show
+                // hole is now TY_STRING → kind 0 (the string-identity render path).
+                part->render_kind = (prt == TY_BOOL) ? 10 : int_kind(prt);
+                // A fresh OWNED-temp string hole (a call/concat result, incl. a desugared `.show()`)
+                // already owns a reference the fold's OP_CONCAT consumes — codegen must NOT also
+                // emit the retaining OP_TO_STRING, or that reference leaks (every Show interpolation
+                // would otherwise leak one string). A borrowed string (a local/field) still retains.
+                part->string_temp = (prt == TY_STRING) && is_owning_temp(c, part->expr, pt);
             }
             return TY_STRING;
         }
@@ -4805,7 +5406,8 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
             if (iface_elems) {
                 elem = exp_elem;   // the array's element type is the interface
             }
-            if (ptr_storage_error(c, elem, e->line, e->col, "an array element")) {
+            if (ptr_storage_error(c, elem, e->line, e->col, "an array element") ||
+                resource_storage_error(c, elem, e->line, e->col, "an array element")) {
                 return TY_ERROR;   // OFI-049: no [Ptr] literal — caught before consuming the handles
             }
             for (size_t i = 0; i < n; i++) {   // the array takes ownership of each
@@ -4989,6 +5591,38 @@ static void report_unconsumed_ptrs(Checker *c, int from, int line, int col) {
 }
 
 
+// report_unconsumed_drop_fields (OFI-122 R6): at an exit from a `resource` drop body, EVERY `Ptr`
+// field of `self` must have been closed (consumed). Report a leak for any that wasn't, naming the
+// field, then latch them so the same leak isn't re-reported at another exit. So a no-op
+// `fn drop(self){}` fails to compile (it leaks the handle), and a drop that closes its field passes.
+static void report_unconsumed_drop_fields(Checker *c, int line, int col) {
+    if (!c->in_resource_drop || c->unreachable) {
+        return;
+    }
+    int missing = c->drop_self_ptr_mask & ~c->drop_self_consumed;
+    if (missing == 0) {
+        return;
+    }
+    StructInfo *si = &c->structs[c->drop_self_struct];
+    int bit = 0;
+    for (int f = 0; f < si->field_count; f++) {
+        if (si->fields[f].type != TY_PTR) {
+            continue;
+        }
+        if (bit < 31 && (missing & (1 << bit))) {
+            char msg[240];
+            snprintf(msg, sizeof msg,
+                     "this 'resource' drop does not close its handle field '%s' on every path; close "
+                     "it (call a function that takes the 'Ptr' by 'move') unconditionally in 'drop'",
+                     si->fields[f].name);
+            type_error(c, line, col, msg);
+        }
+        bit++;
+    }
+    c->drop_self_consumed |= missing;   // latch: don't re-report at another exit of the same drop
+}
+
+
 
 
 
@@ -5126,6 +5760,9 @@ static void check_stmt(Checker *c, Stmt *s) {
                 vt    = annotation_type(c, s->as.let.type);   // the interface type
                 owned = 1;                                    // the box owns its receiver
             }
+            // A sized numeric binding records its width kind so the NATIVE backend stores it at
+            // width (OFI-123); non-numeric (incl. bool) stay -1 → a uniform Value. The VM ignores it.
+            s->as.let.scalar_kind = is_numeric_type(vt) ? int_kind(vt) : -1;
             // An immutable all-scalar struct binding is stored MULTI-SLOT (its fields
             // exploded on the stack), not as a boxed object (value-types 3b). `var`
             // (mutable) and boxed-field structs stay boxed for now.
@@ -5410,6 +6047,7 @@ static void check_stmt(Checker *c, Stmt *s) {
             // so a returned handle (`return f`) is already marked consumed and is not flagged — no
             // "except the returned binding" carve-out needed. Covers bare return + every value shape.
             report_unconsumed_ptrs(c, 0, s->line, s->col);
+            report_unconsumed_drop_fields(c, s->line, s->col);   // OFI-122: drop must close its handles
             break;
 
         case STMT_IF: {
@@ -6244,6 +6882,9 @@ static SemType check_lambda(Checker *c, Expr *e, SemType expected) {
     ld->as.fn.body          = e->as.lambda.body;
     ld->as.fn.line          = e->line;
     ld->as.fn.col           = e->col;
+    ld->as.fn.src_path      = diag_src(c);   // OFI-111a: the lambda's defining module (it lands
+                                             // outside every ModuleSet range, so module_of_decl
+                                             // would mis-map it to the entry file).
     c->lambda_decls[c->lambda_count++] = ld;
 
     e->as.lambda.lifted_fn_index = fn_index;
@@ -6538,12 +7179,13 @@ static void check_callable(Checker *c, const FnDecl *fn, SemType self_type,
     // return value), checked before every return. Bind `result` to the return type
     // for the duration of the check. A unit function has no value to bind.
     //
-    // NOTE (OFI-026): `ensures` on a unit-returning function is rejected for now. A
-    // void `mut self` mutator stating a postcondition on its own state is desirable,
-    // but enabling it surfaced an order-dependent CORRUPTION of cross-module function
-    // resolution (checking such a clause left calls in a *different* module unresolved
-    // at codegen). Until that root cause is found, unit `ensures` stays disallowed so
-    // the compiler can't silently mis-compile; see OFI-026.
+    // NOTE (OFI-026, CLOSED 2026-06-13): `ensures` on a unit-returning function IS
+    // allowed — a void `mut self` mutator may state a postcondition on its own state
+    // (std/ui.em's `begin(mut self) ensures self.cx == self.style.pad` relies on it).
+    // Enabling it once surfaced an order-dependent corruption of cross-module call
+    // resolution, but the root cause was an uninitialised `closure_call` field in
+    // `new_expr` (the arena does not zero memory), NOT the contract check itself —
+    // fixed, so unit `ensures` is sound. Below: bind `result` only for value returns.
     if (fn->ensures_count > 0) {
         int saved = c->local_count;
         if (c->current_return != TY_UNIT) {
@@ -6560,6 +7202,32 @@ static void check_callable(Checker *c, const FnDecl *fn, SemType self_type,
         c->local_count = saved;   // 'result' (if bound) leaves scope
     }
 
+    // OFI-122: detect a `resource struct`'s `drop` body and arm the handle-field carve-out + leak
+    // scan (after self is declared + contracts checked, before the body; cleared after it below).
+    c->in_resource_drop   = 0;
+    c->drop_self_struct   = -1;
+    c->drop_self_slot     = -1;
+    c->drop_self_consumed = 0;
+    c->drop_self_ptr_mask = 0;
+    if (c->self_struct >= 0 && c->structs[c->self_struct].is_resource &&
+        fn->name != NULL && strcmp(fn->name, "drop") == 0) {
+        c->in_resource_drop = 1;
+        c->drop_self_struct = c->self_struct;
+        for (int i = 0; i < c->local_count; i++) {
+            if (c->locals[i].name != NULL && strcmp(c->locals[i].name, "self") == 0) {
+                c->drop_self_slot = i;
+                break;
+            }
+        }
+        StructInfo *rsi = &c->structs[c->self_struct];
+        int bit = 0;
+        for (int f = 0; f < rsi->field_count; f++) {
+            if (rsi->fields[f].type == TY_PTR) {
+                if (bit < 31) { c->drop_self_ptr_mask |= (1 << bit); }
+                bit++;
+            }
+        }
+    }
     for (size_t i = 0; i < fn->body.count; i++) {
         check_stmt(c, fn->body.stmts[i]);
         if (stmt_diverges(fn->body.stmts[i])) {
@@ -6567,6 +7235,11 @@ static void check_callable(Checker *c, const FnDecl *fn, SemType self_type,
         }
     }
     drop_locals(c, 0);   // function-body bindings leave scope at the closing brace
+    // OFI-122: on the fall-through exit of a `resource` drop, every handle field must be closed too.
+    if (c->in_resource_drop) {
+        report_unconsumed_drop_fields(c, fn->line, fn->col);
+        c->in_resource_drop = 0;
+    }
     // Definite-return (OFI-029): a `-> T` function must return on every path, else the
     // codegen fall-off would yield a silent garbage value. Unit functions may fall off.
     if (fn->has_body && c->current_return != TY_UNIT && c->current_return != TY_ERROR &&
@@ -6652,6 +7325,11 @@ static void collect_signature(Checker *c, const FnDecl *fn) {
                    "a function cannot be named like a numeric type (i8/i16/i32/i64/int/"
                    "u8/u16/u32/u64/f32/f64): a call to it would parse as a width conversion "
                    "and never reach the function (OFI-066) — rename it");
+    }
+    if (fn->name[0] == '_' && fn->name[1] == '\0') {
+        // `_` is the discard, not a name — a function named `_` could never be called (OFI-098).
+        type_error(c, fn->line, fn->col,
+                   "a function cannot be named '_' — it is the write-only discard, not a usable name");
     }
     // Reject a second top-level function of the same name in this module (OFI-008);
     // otherwise every call would silently bind to the first and the rest is dead.
@@ -6853,8 +7531,13 @@ static void collect_struct_fields(Checker *c, int index, const Decl *d) {
     for (size_t i = 0; i < d->as.struct_.field_count; i++) {
         const Field *f = &d->as.struct_.fields[i];
         SemType ft = annotation_type(c, f->type);
-        if (ptr_storage_error(c, ft, f->line, f->col, "a struct field")) {
-            ft = TY_ERROR;   // OFI-049: a Ptr handle cannot be stored in a struct (no destructor)
+        if (!si->is_resource && ptr_storage_error(c, ft, f->line, f->col, "a struct field")) {
+            ft = TY_ERROR;   // OFI-049: a Ptr cannot be stored in a PLAIN struct (no destructor); a
+                             // `resource struct` LIFTS this for its own fields — its `drop` closes them.
+        } else if (!si->is_resource &&
+                   resource_storage_error(c, ft, f->line, f->col, "a field of a non-'resource' struct")) {
+            ft = TY_ERROR;   // OFI-122: a `resource` field is allowed ONLY inside another resource struct
+                             // (else copying the plain struct would clone the resource → double drop).
         } else if (ft == TY_ERROR) {
             type_error(c, d->line, d->col,
                        "struct field types must be 'int', 'bool', 'float', "
@@ -6956,6 +7639,43 @@ static void collect_struct_methods(Checker *c, int index, const Decl *d, int *fi
         mi->ret = fn->return_type
                       ? resolve_self(annotation_type(c, fn->return_type), self_type)
                       : TY_UNIT;
+    }
+    // `resource struct` (OFI-122): record its `drop` method — its fn-table index drives the runtime
+    // drop hook — and require exactly one `fn drop(self)` taking self by value and returning nothing.
+    // `drop` is reserved: a PLAIN struct may not define it (it would silently never run).
+    si->drop_fn = -1;
+    int drop_count = 0;
+    for (int m = 0; m < si->method_count; m++) {
+        if (strcmp(si->methods[m].name, "drop") != 0) {
+            continue;
+        }
+        drop_count++;
+        MethodInfo *dm = &si->methods[m];
+        si->drop_fn = dm->fn_index;
+        if (!si->is_resource) {
+            type_error(c, dm->decl->line, dm->decl->col,
+                       "'drop' is reserved for a 'resource struct'; a plain struct cannot define it");
+        }
+        if (dm->param_count != 0) {
+            type_error(c, dm->decl->line, dm->decl->col,
+                       "a 'resource' drop must be 'fn drop(self)' — no parameters beyond self");
+        }
+        if (dm->self_qual != OWN_NONE) {
+            type_error(c, dm->decl->line, dm->decl->col,
+                       "a 'resource' drop must take plain 'self' (not 'mut self' / 'move self'); it "
+                       "borrows self to close its handles, and the runtime reclaims self afterward");
+        }
+        if (dm->ret != TY_UNIT) {
+            type_error(c, dm->decl->line, dm->decl->col,
+                       "a 'resource' drop must return nothing");
+        }
+    }
+    if (si->is_resource && drop_count == 0) {
+        type_error(c, d->line, d->col,
+                   "a 'resource struct' must declare exactly one 'fn drop(self)' to release its resource");
+    }
+    if (drop_count > 1) {
+        type_error(c, d->line, d->col, "a 'resource struct' may declare only one 'drop' method");
     }
     leave_type_params(c);
 }
@@ -7104,6 +7824,9 @@ static int type_param_has_bound(Checker *c, SemType t, int iid) {
 
 
 static int type_satisfies_bound(Checker *c, SemType t, int iid) {
+    if (is_newtype(t)) {   // OFI-149: a newtype satisfies any bound its base does (Hash/Eq for Map keys)
+        return type_satisfies_bound(c, newtype_base(c, t), iid);
+    }
     if (is_struct_type(t) && struct_implements(c, t, iid)) {
         return 1;
     }
@@ -7169,6 +7892,11 @@ static int *build_witness(Checker *c, SemType type, int iid, int *out_count) {
 static int assignable(Checker *c, Expr *e, SemType actual, SemType expected) {
     if (actual == expected) {
         return 1;
+    }
+    // OFI-149: a newtype is nominally distinct — never implicitly assignable to/from its base or
+    // another newtype (same-newtype is the equal-types case above). Construct with `Name(x)`.
+    if (is_newtype(actual) || is_newtype(expected)) {
+        return 0;
     }
     if (is_interface_type(expected) && is_struct_type(actual) &&
         struct_implements(c, actual, interface_id_of(expected))) {
@@ -7318,6 +8046,7 @@ static void collect_enum_variants(Checker *c, int enum_id, const Decl *d) {
                            "variant field types must be 'int', 'bool', 'float', "
                            "'string', a struct/enum, or a type parameter");
             }
+            vi->field_names[vi->field_count] = src->fields[f].name;   // for named construction (OFI-140)
             vi->fields[vi->field_count++] = ft;
         }
         ei->variant_count++;
@@ -7754,6 +8483,8 @@ static void build_layouts(Checker *c, StructLayout **out_layouts, int *out_count
         L[s].field_count = si->field_count;
         L[s].base_id     = s;
         L[s].is_rc       = si->is_rc;
+        L[s].is_resource = si->is_resource;
+        L[s].drop_fn     = si->drop_fn;
         layout_alloc_fields(c, &L[s], si->field_count + si->witness_count);
         for (int f = 0; f < si->field_count; f++) {
             SemType ft = si->fields[f].type;
@@ -7786,6 +8517,8 @@ static void build_layouts(Checker *c, StructLayout **out_layouts, int *out_count
         L[id].field_count = base->field_count;
         L[id].base_id     = g->base;
         L[id].is_rc       = 0;   // a generic instance is never rc (R7 bans generic rc structs)
+        L[id].is_resource = 0;   // nor resource (generic resource structs are banned, Phase 1)
+        L[id].drop_fn     = -1;
         layout_alloc_fields(c, &L[id], base->field_count + base->witness_count);
         for (int f = 0; f < base->field_count; f++) {
             SemType ft = subst(c, g, base->fields[f].type);
@@ -7907,6 +8640,10 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                     type_error(&c, d->line, d->col,
                                "a type with this name is already declared in this module");
                 }
+                if (d->as.struct_.name[0] == '_' && d->as.struct_.name[1] == '\0') {
+                    type_error(&c, d->line, d->col,
+                               "a struct cannot be named '_' — it is the discard, not a usable type name");
+                }
                 ensure_structs_cap(&c, c.struct_count + 1);
                 StructInfo *si = &c.structs[c.struct_count];
                 si->name             = d->as.struct_.name;
@@ -7924,6 +8661,13 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                 if (si->is_rc) {
                     c.any_rc = 1;   // enable the rc-specific mutation guards for this program
                 }
+                si->is_resource      = d->as.struct_.is_resource;
+                si->drop_fn          = -1;   // set in collect_struct_methods once `drop` is found
+                if (si->is_rc && si->is_resource) {
+                    type_error(&c, d->line, d->col,
+                               "a struct cannot be both 'rc' (shared, immutable) and 'resource' "
+                               "(uniquely owned, drop-bearing) — they are opposite ownership models");
+                }
                 si->def_line         = d->line;
                 si->def_col          = d->col;
                 // R7: a GENERIC `rc struct<T>` is deferred (v1). A type-parameter field is erased
@@ -7935,6 +8679,11 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                                "a generic 'rc struct' is not supported yet; an 'rc struct' must "
                                "have only concrete immutably-shareable fields (scalar, string, "
                                "enum, or another rc struct)");
+                }
+                if (si->is_resource && d->as.struct_.generic_count > 0) {
+                    type_error(&c, d->line, d->col,
+                               "a generic 'resource struct' is not supported yet (Phase 1); a "
+                               "'resource struct' must be non-generic");
                 }
                 for (size_t g = 0; g < d->as.struct_.generic_count &&
                                    si->generic_count < MAX_TYPE_ARGS; g++) {
@@ -7954,6 +8703,10 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                     type_error(&c, d->line, d->col,
                                "a type with this name is already declared in this module");
                 }
+                if (d->as.enum_.name[0] == '_' && d->as.enum_.name[1] == '\0') {
+                    type_error(&c, d->line, d->col,
+                               "an enum cannot be named '_' — it is the discard, not a usable type name");
+                }
                 EnumInfo *ei = &c.enums[c.enum_count];
                 ei->name          = d->as.enum_.name;
                 ei->variant_count = 0;
@@ -7971,6 +8724,41 @@ int check_program(Program *program, const ModuleSet *modules, Arena *arena,
                     ei->generics[ei->generic_count++] = d->as.enum_.generics[g].name;
                 }
                 c.enum_count++;
+            }
+        } else if (d->kind == DECL_TYPE) {
+            // OFI-149: register a newtype. v1 base is a scalar numeric or bool type (string and
+            // other bases are a later phase); a scalar newtype is freely copyable like its base.
+            if (c.newtype_count >= MAX_STRUCTS) {
+                type_error(&c, d->line, d->col, "too many newtypes");
+            } else if (type_name_taken(&c, d->as.type_.name, c.current_module) ||
+                       resolve_newtype(&c, d->as.type_.name) >= 0) {
+                type_error(&c, d->line, d->col,
+                           "a type with this name is already declared in this module");
+            } else {
+                SemType base = annotation_type(&c, d->as.type_.base);
+                if (!is_integer_type(base) && !is_float_type(base) &&
+                    base != TY_BOOL && base != TY_STRING) {
+                    type_error(&c, d->line, d->col,
+                               "a newtype's base must be a scalar (numeric or bool) or string type");
+                    base = TY_INT;
+                }
+                NewtypeInfo *ni = &c.newtypes[c.newtype_count++];
+                ni->name     = d->as.type_.name;
+                ni->base     = base;
+                ni->module   = c.current_module;
+                ni->def_line = d->line;
+                ni->def_col  = d->col;
+                // OFI-150 v1: a refinement predicate is supported on a NUMERIC or BOOL base only —
+                // a refcounted (string) base would be re-read by the predicate AND produced as the
+                // value, double-counting its reference. A string newtype without a predicate is fine.
+                if (d->as.type_.refinement != NULL && base == TY_STRING) {
+                    type_error(&c, d->line, d->col,
+                               "a refinement ('where') predicate is supported on a numeric or bool "
+                               "base only (a string newtype must omit the predicate for now)");
+                }
+                ni->refinement = (base == TY_STRING) ? NULL : d->as.type_.refinement;
+                ni->refinement_checked = 0;
+                ni->refinement_in_progress = 0;
             }
         } else if (d->kind == DECL_LET) {
             collect_global(&c, d);   // a top-level constant (OFI-023)

@@ -1,0 +1,1 @@
+tests/run/error_resource_noop_drop.em:8:5: error: this 'resource' drop does not close its handle field 'conn' on every path; close it (call a function that takes the 'Ptr' by 'move') unconditionally in 'drop'

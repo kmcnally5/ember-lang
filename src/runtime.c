@@ -251,6 +251,14 @@ void drop_value(EmberRt *ctx, Value v) {
             // (a nested struct recursively, a refcounted field by dropping a ref).
             // Packed scalar fields own nothing, so the descriptor's kinds drive it.
             const StructType *st = &ctx->structs[s->type_id];
+            // OFI-122: a `resource struct` runs its user `drop(self)` FIRST (to close its handles),
+            // THEN the boxed fields release + reclaim below. `self` is BORROWED into drop (plain self),
+            // so drop never frees it — this teardown does. The `Ptr` handle fields are scalars (not
+            // AEK_BOXED), so the loop below never touches them: the close in `drop` is the only one.
+            if (st->is_resource && st->drop_fn >= 0 && ctx->invoke != NULL) {
+                Value self = OBJ_VAL(o);
+                ctx->invoke(ctx, st->drop_fn, &self);
+            }
             for (int i = 0; i < st->field_count; i++) {
                 if (st->kind[i] == AEK_BOXED) {
                     drop_value(ctx, value_box(s->data + st->offset[i], AEK_BOXED));
@@ -727,6 +735,39 @@ Value em_enum_field(EmberRt *ctx, Value v, int index) {
     // recursively explodes (OOM). The native Map-of-aggregate fix belongs in the codegen choosing an
     // OWNED read where the payload is consumed (deferred — OFI-062/063 native, OFI-051 umbrella).
     return value_box(p, k);
+}
+
+
+// em_enum_take reads payload field `index` of an enum and TRANSFERS its ownership to the caller — the
+// native `?`-extract (OFI-122; this is the OWNED enum-read the comment above defers). A unique-owner
+// aggregate payload (a non-rc struct — e.g. a `resource` — or a non-borrowed array) is MOVED out: the
+// enum's slot is nil'd so the enum's OWN drop won't release it, leaving the caller its sole owner
+// (dropped exactly once). A refcounted/shared payload (string / enum / rc struct / closure / channel)
+// is SHARED via a retain — the enum drop then decrements its own reference. This replaces the native
+// `?`'s old em_enum_field + blanket OBJ_RETAIN, which DOUBLE-DROPPED a unique-owner payload (acute for
+// a resource, whose drop runs once: the enum-drop ran it, then the extracted binding's scope-exit
+// drop ran it again on freed memory). Enum payloads are always boxed slots, so `p` is a Value cell.
+Value em_enum_take(EmberRt *ctx, Value v, int index) {
+    int k;
+    unsigned char *p = field_loc(ctx, AS_STRUCT(v), index, &k);
+    Value payload = value_box(p, k);
+    if (!IS_OBJ(payload)) {
+        return payload;                 // a scalar payload owns nothing
+    }
+    Obj *o = AS_OBJ(payload);
+    int unique_owner = 0;
+    if (o->type == OBJ_STRUCT) {
+        ObjStruct *s = (ObjStruct *)o;
+        unique_owner = !s->is_enum && !ctx->structs[s->type_id].is_rc;   // a plain or resource struct
+    } else if (o->type == OBJ_ARRAY) {
+        unique_owner = !((ObjArray *)o)->borrowed;                       // an owned (non-view) array
+    }
+    if (unique_owner) {
+        *(Value *)p = INT_VAL(0);       // MOVE: nil the slot so the enum's drop won't release the payload
+    } else {
+        OBJ_RETAIN(o);                  // SHARE: keep a reference; the enum drop decrements its own
+    }
+    return payload;
 }
 
 

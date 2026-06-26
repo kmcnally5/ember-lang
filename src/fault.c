@@ -64,6 +64,9 @@ static void render_human(const Fault *f, FILE *out) {
         fputs(f->file, out);
         if (f->line > 0) {
             fprintf(out, ":%d", f->line);
+            if (f->col > 0) {
+                fprintf(out, ":%d", f->col);
+            }
         }
     } else if (f->line > 0) {
         fprintf(out, "line %d", f->line);
@@ -125,6 +128,9 @@ static void render_agent(const Fault *f, FILE *out) {
     }
     if (f->line > 0) {
         fprintf(out, ",\"line\":%d", f->line);
+        if (f->col > 0) {
+            fprintf(out, ",\"col\":%d", f->col);
+        }
     }
     if (f->fn != NULL) {
         fputs(",\"fn\":", out);

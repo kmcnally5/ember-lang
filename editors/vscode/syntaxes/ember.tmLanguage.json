@@ -78,7 +78,7 @@
         },
         {
           "name": "keyword.declaration.ember",
-          "match": "\\b(let|var|fn|struct|enum|interface|extern)\\b"
+          "match": "\\b(let|var|fn|struct|enum|interface|extern|type|where)\\b"
         },
         {
           "name": "keyword.concurrency.ember",

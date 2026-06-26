@@ -1,0 +1,2 @@
+tests/run/error_refinement_self_cycle.em:5:23: error: a newtype's 'where' predicate cannot construct its own type (the refinement would never terminate)
+tests/run/error_refinement_self_cycle.em:5:23: error: comparison operands must be the same numeric type

@@ -1,5 +1,5 @@
 error[index_out_of_bounds]: array index out of bounds
-  --> tests/run/error_index_oob.em:4 (in get)
+  --> tests/run/error_index_oob.em:4:15 (in get)
   why:    indexing requires 0 <= index < len
   values: index = 5, len = 3
   route:  get (line 4) <- main (line 9)

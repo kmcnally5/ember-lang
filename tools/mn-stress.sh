@@ -176,5 +176,30 @@ EOF
 # sum_{i=0..499} i = 499*500/2 = 124750
 run_case "pipeline-with-close" "total=124750" 0 "$WD/pipe.em"
 
+# ---- OFI-138/089: main PARKS at the nursery join (the body ends while a child is still in flight),
+# ---- then RESUMES. The main fiber is PINNED to worker 0, so its resume lands on the calling thread —
+# ---- the GL-context thread for a GUI app, where the prior bug ran teardown off-context (SEGV). A lost
+# ---- wakeup in the pinned-slot routing would manifest here as a HANG (the watchdog fires). ----
+cat > "$WD/join_park.em" <<'EOF'
+fn worker(ch: Channel<int>) {
+    var s = 0
+    var i = 0
+    loop { if i == 3000000 { break } s = s + 1 i = i + 1 }
+    send(ch, s)
+}
+fn main() -> int {
+    let ch: Channel<int> = channel(1)
+    var got = 0
+    nursery {
+        spawn worker(ch)
+        // body ends immediately → main parks at the join while the worker is still computing
+    }
+    match recv(ch) { case Some(v) { got = v } case None { got = 0 - 1 } }
+    print("got={got}\n")
+    return 0
+}
+EOF
+run_case "main-parks-at-join" "got=3000000" 0 "$WD/join_park.em"
+
 echo "mn-stress: passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

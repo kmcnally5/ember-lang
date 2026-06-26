@@ -1,0 +1,1 @@
+tests/run/error_newtype_mismatch.em:12:12: error: argument type does not match the parameter

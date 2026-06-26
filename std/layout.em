@@ -38,6 +38,9 @@ struct LNode {
     gap: int
     pad: int
     grow: int         // flex-grow weight (0 = fixed to intrinsic size)
+    no_stretch: bool  // a leaf that OPTS OUT of cross-axis STRETCH: keeps its intrinsic cross size
+                      // (start-aligned) even inside a `stretch` parent — so an atomic action widget
+                      // (a button) sizes to its content instead of spanning the column (OFI-115)
 
     float: bool       // a FLOATING node: skipped by its parent's flow, placed by solve()
     fw: int           // floating requested width  (0 = size to content)
@@ -98,7 +101,7 @@ struct Layout {
         self.nodes.append(LNode {
             parent: self.cur, first_child: -1, last_child: -1, next_sibling: -1,
             leaf: false, dir: dir, justify: justify, align: align, gap: gap, pad: pad, grow: grow,
-            float: false, fw: 0, fh: 0, fx: -1, fy: -1,
+            no_stretch: false, float: false, fw: 0, fh: 0, fx: -1, fy: -1,
             cw: 0, ch: 0, rx: 0, ry: 0, rw: 0, rh: 0
         })
         self._link(idx)
@@ -117,7 +120,7 @@ struct Layout {
         self.nodes.append(LNode {
             parent: self.cur, first_child: -1, last_child: -1, next_sibling: -1,
             leaf: false, dir: dir, justify: justify, align: align, gap: gap, pad: pad, grow: 0,
-            float: true, fw: fw, fh: fh, fx: -1, fy: -1,
+            no_stretch: false, float: true, fw: fw, fh: fh, fx: -1, fy: -1,
             cw: 0, ch: 0, rx: 0, ry: 0, rw: 0, rh: 0
         })
         self._link(idx)
@@ -133,7 +136,7 @@ struct Layout {
         self.nodes.append(LNode {
             parent: self.cur, first_child: -1, last_child: -1, next_sibling: -1,
             leaf: false, dir: dir, justify: justify, align: align, gap: gap, pad: pad, grow: 0,
-            float: true, fw: fw, fh: fh, fx: fx, fy: fy,
+            no_stretch: false, float: true, fw: fw, fh: fh, fx: fx, fy: fy,
             cw: 0, ch: 0, rx: 0, ry: 0, rw: 0, rh: 0
         })
         self._link(idx)
@@ -142,18 +145,32 @@ struct Layout {
     }
 
 
-    // leaf adds a fixed-size slot (a widget) of intrinsic size (w, h) to the current container,
-    // with an optional flex-grow weight. Returns its node index (so the caller can read its rect).
-    fn leaf(mut self, w: int, h: int, grow: int) -> int {
+    // _leaf adds a fixed-size slot (a widget) of intrinsic size (w, h) with a flex-grow weight and an
+    // explicit cross-axis-stretch opt-out. Returns its node index (so the caller can read its rect).
+    fn _leaf(mut self, w: int, h: int, grow: int, no_stretch: bool) -> int {
         let idx = self.nodes.len()
         self.nodes.append(LNode {
             parent: self.cur, first_child: -1, last_child: -1, next_sibling: -1,
             leaf: true, dir: COL, justify: START, align: START, gap: 0, pad: 0, grow: grow,
-            float: false, fw: 0, fh: 0, fx: -1, fy: -1,
+            no_stretch: no_stretch, float: false, fw: 0, fh: 0, fx: -1, fy: -1,
             cw: w, ch: h, rx: 0, ry: 0, rw: 0, rh: 0
         })
         self._link(idx)
         return idx
+    }
+
+
+    // leaf adds a widget slot that FILLS the cross axis under a `stretch` parent (text, dividers — they
+    // want to span to wrap / rule). Pair with leaf_fixed for content-sized widgets.
+    fn leaf(mut self, w: int, h: int, grow: int) -> int {
+        return self._leaf(w, h, grow, false)
+    }
+
+
+    // leaf_fixed adds a widget slot pinned to its intrinsic cross size — it will NOT stretch to fill a
+    // `stretch` parent (an atomic action widget like a button sizes to its content, OFI-115).
+    fn leaf_fixed(mut self, w: int, h: int, grow: int) -> int {
+        return self._leaf(w, h, grow, true)
     }
 
 
@@ -312,7 +329,9 @@ struct Layout {
             } else if self.nodes[i].align == END {
                 crossoff = crossbox - ccross
             } else if self.nodes[i].align == STRETCH {
-                ccross = crossbox
+                if !self.nodes[c].no_stretch {       // a no_stretch leaf keeps its intrinsic cross size (OFI-115)
+                    ccross = crossbox
+                }
             }
             if dir == ROW {
                 self.nodes[c].rx = bx + cursor

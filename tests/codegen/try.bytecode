@@ -36,8 +36,8 @@
 0022    |  GET_LOCAL 1
 0024    |  GET_FIELD 0
 0026   10  GET_LOCAL 2
-0028    |  DROP     0
-0030    |  DROP     1
+0028    |  DROP     1
+0030    |  DROP     0
 0032    |  RETURN  
 0033    |  POP     
 0034    |  JUMP     24 (-> 0061)
@@ -50,8 +50,8 @@
 0047    |  POP     
 0048   11  CONST    3  (= 1)
 0050    |  NEG      0
-0052    |  DROP     0
-0054    |  DROP     1
+0052    |  DROP     1
+0054    |  DROP     0
 0056    |  RETURN  
 0057    |  JUMP     1 (-> 0061)
 0060    |  POP     

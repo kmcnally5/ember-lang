@@ -56,10 +56,25 @@ for src in "$ROOT"/tests/graphics/*.em; do
         continue
     fi
 
-    if [ "$actual" = "$(cat "$golden")" ]; then
+    # Compare TOLERANTLY when python3 is available (OFI-068): text metrics drift +/-1px across freetype
+    # versions, shifting x/w in the tape; tools/tape-cmp.py allows up to EMBER_TAPE_TOL px on position
+    # fields while keeping op/colour/text/structure exact. Without python3, fall back to an exact match.
+    ok=0
+    if command -v python3 >/dev/null 2>&1; then
+        amatch=$(mktemp)
+        printf '%s\n' "$actual" > "$amatch"
+        if python3 "$ROOT/tools/tape-cmp.py" "$golden" "$amatch" >/tmp/tape_cmp_msg 2>&1; then
+            ok=1
+        fi
+        rm -f "$amatch"
+    else
+        [ "$actual" = "$(cat "$golden")" ] && ok=1
+    fi
+    if [ "$ok" -eq 1 ]; then
         pass=$((pass + 1))
     else
         echo "FAIL $(basename "$src")"
+        [ -s /tmp/tape_cmp_msg ] && printf '  %s\n' "$(cat /tmp/tape_cmp_msg)"
         printf '  expected: %s\n' "$(cat "$golden")"
         printf '  actual:   %s\n' "$actual"
         fail=$((fail + 1))

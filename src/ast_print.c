@@ -500,6 +500,12 @@ static void print_decl(const Decl *d, int depth) {
                 print_fn(&d->as.extern_.fns[i], depth + 1);
             }
             break;
+        case DECL_TYPE:
+            ind(depth);
+            printf("Type %s = ", d->as.type_.name);
+            print_type(d->as.type_.base);
+            printf("\n");
+            break;
     }
 }
 

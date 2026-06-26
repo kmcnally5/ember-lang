@@ -1,0 +1,1 @@
+{"severity":"error","category":"contract","code":"refinement_violation","message":"refinement violated constructing 'Percent' (line 6)","file":"tests/fault/refinement_violation.em","line":6,"col":22,"fn":"main","route":[{"fn":"main","line":6}]}

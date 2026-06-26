@@ -7,7 +7,7 @@ description: The binding design of record for Ember's std/http — the blocking 
 # Ember `std/http` — Design of Record
 
 *Decided 2026-06-19. This is a binding design: the API and the transport model below are the plan; the
-modules are built against it. Decisions trace to [MANIFESTO.md](../MANIFESTO.md). Supersedes the
+modules are built against it. Decisions trace to [MANIFESTO.md](https://github.com/kmcnally5/ember-lang/blob/main/MANIFESTO.md). Supersedes the
 ad-hoc `extern http_post` the desktop apps use today.*
 
 ## Thesis

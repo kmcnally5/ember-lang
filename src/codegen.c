@@ -2,6 +2,7 @@
 #include "opcode.h"
 #include "token.h"
 #include "builtin.h"
+#include "module.h"   // module_of_decl — per-function source path (OFI-111a)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,9 +71,14 @@ typedef struct {
     int        *local_struct;              // struct type id if this binding is a multi-slot
                                            // struct value (its fields exploded); -1 if not
     int         phys_count;
+    // OFI-150: while emitting a refinement `where` predicate, EXPR_IDENT "self" is emitted as
+    // THIS expression — the (pure) constructor argument — so the check reads exactly the value
+    // the construction stores, with NO stack-slot tracking. NULL except during a predicate emit.
+    const Expr *refine_self_arg;
     int         ret_struct_id;  // value-types 3b.4b: struct id if the current function
                                 // RETURNS an all-scalar struct MULTI-SLOT, else -1
     int         current_line;   // source line of the node currently being lowered
+    int         current_col;    // source column of the node currently being lowered (OFI-111a)
     LoopCtx     loops[MAX_LOOP_DEPTH];
     int         loop_depth;
     const MonoPlan *plan;       // monomorphization plan: resolves generic calls
@@ -103,7 +109,7 @@ static void internal_error(Codegen *cg, const char *what) {
 
 
 static void emit(Codegen *cg, uint8_t byte) {
-    chunk_write(cg->chunk, byte, cg->current_line);
+    chunk_write(cg->chunk, byte, cg->current_line, cg->current_col);
 }
 
 
@@ -566,6 +572,7 @@ static void gen_expr(Codegen *cg, const Expr *e) {
 
 static void gen_expr_raw(Codegen *cg, const Expr *e) {
     cg->current_line = e->line;
+    cg->current_col  = e->col;
     switch (e->kind) {
         case EXPR_INT:
             emit_const(cg, e->as.int_lit);
@@ -625,6 +632,16 @@ static void gen_expr_raw(Codegen *cg, const Expr *e) {
             break;
 
         case EXPR_IDENT: {
+            // OFI-150: inside a refinement predicate, `self` IS the (pure) constructor argument —
+            // emit it directly (re-read). Clear the flag while emitting so a `Pct(self)` arg's own
+            // `self` resolves to the real binding, then restore for the predicate's next `self`.
+            if (cg->refine_self_arg != NULL && strcmp(e->as.ident, "self") == 0) {
+                const Expr *arg = cg->refine_self_arg;
+                cg->refine_self_arg = NULL;
+                gen_expr(cg, arg);
+                cg->refine_self_arg = arg;
+                break;
+            }
             int lidx = resolve_local_logical(cg, e->as.ident);
             if (lidx >= 0 && cg->local_struct[lidx] >= 0) {
                 // A multi-slot struct local read as a whole value: re-box it (read its N
@@ -1094,7 +1111,36 @@ static void gen_expr_raw(Codegen *cg, const Expr *e) {
                 }
             }
 
-            // Numeric width conversion: a type-name call (u8(x), i32(x), int(x)).
+            // Newtype construction (OFI-149): `UserId(x)` is zero-cost — the value IS the base value,
+    // so emit just the argument with no wrapper.
+    if (e->as.call.newtype_ctor) {
+        // OFI-150: a refined newtype checks its `where` predicate at construction. The predicate
+        // is emitted with `self` SUBSTITUTED by the (pure, numeric/bool) constructor argument
+        // (EXPR_IDENT "self" re-emits cg->refine_self_arg), then OP_CONTRACT_CHECK. That whole
+        // check is STACK-BALANCED — its temps are pushed and the single bool it leaves is popped
+        // by CONTRACT_CHECK — so it is sound no matter how deeply this construction is nested as a
+        // sub-expression (a 2nd argument, a binary RHS, a later array element, …); no stack-slot
+        // tracking is needed. The value is produced AFTER the check. Debug-checks; --release
+        // elides (VM-only, like every contract — OFI-109).
+        if (!codegen_release_profile && e->as.call.refinement != NULL) {
+            const Expr *saved = cg->refine_self_arg;
+            cg->refine_self_arg = e->as.call.args[0];
+            gen_expr(cg, e->as.call.refinement);   // `self` -> the (pure) arg; leaves a bool
+            cg->refine_self_arg = saved;
+            const char *tn = callee->kind == EXPR_IDENT ? callee->as.ident : "?";
+            char msg[200];
+            int n = snprintf(msg, sizeof msg,
+                             "refinement violated constructing '%s' (line %d)", tn, e->line);
+            size_t midx = chunk_add_string(cg->chunk, msg, (size_t)(n > 0 ? n : 0));
+            cg->current_line = e->line;   // the Fault points at the construction site
+            cg->current_col  = e->col;
+            emit(cg, OP_CONTRACT_CHECK);
+            emit_idx(cg, midx);
+        }
+        gen_expr(cg, e->as.call.args[0]);   // the value (the construction's result)
+        break;
+    }
+    // Numeric width conversion: a type-name call (u8(x), i32(x), int(x)).
             if (callee->kind == EXPR_IDENT && e->as.call.arg_count == 1 &&
                 is_numeric_typename(callee->as.ident)) {
                 gen_expr(cg, e->as.call.args[0]);
@@ -1404,8 +1450,14 @@ static void gen_expr_raw(Codegen *cg, const Expr *e) {
                 const StrPart *part = &e->as.str.parts[i];
                 if (part->expr != NULL) {
                     gen_expr(cg, part->expr);
-                    emit(cg, OP_TO_STRING);
-                    emit(cg, (uint8_t)part->render_kind);
+                    // An owned-temp string hole already leaves an owned reference on the stack —
+                    // the consuming OP_CONCAT below takes it directly. Emitting the retaining
+                    // OP_TO_STRING here would leak that reference (OFI-146). A non-string hole, or
+                    // a borrowed string, still needs OP_TO_STRING (render / retain a borrow).
+                    if (!part->string_temp) {
+                        emit(cg, OP_TO_STRING);
+                        emit(cg, (uint8_t)part->render_kind);
+                    }
                 } else {
                     emit(cg, OP_STRING);
                     emit_idx(cg, chunk_add_string(cg->chunk, part->text, part->len));
@@ -1579,7 +1631,11 @@ static void gen_block(Codegen *cg, const Block *b);
 // checker, so its slot is either nilled or balanced. Used at every `return` and at
 // the implicit fall-off-the-end return.
 static void emit_return_drops(Codegen *cg) {
-    for (int i = 0; i < cg->local_count; i++) {
+    // Reverse declaration order (last-declared, first-dropped — the RAII convention), so a `resource`
+    // whose `drop` has an observable effect drops in the SAME order as the native backend (which drops
+    // in reverse) and as block scope-exit (emit_drops_and_pops, also reverse). Drops are independent
+    // (no aliasing), so the order is free for non-resource locals — invisible to every existing test.
+    for (int i = cg->local_count - 1; i >= 0; i--) {
         if (cg->local_drop[i]) {
             emit(cg, OP_DROP);
             emit_idx(cg, cg->local_phys[i]);
@@ -1777,6 +1833,7 @@ static void gen_array_append_writeback(Codegen *cg, const Expr *call) {
 
 static void gen_stmt(Codegen *cg, const Stmt *s) {
     cg->current_line = s->line;
+    cg->current_col  = s->col;
     switch (s->kind) {
         case STMT_RETURN:
             if (cg->ret_struct_id >= 0 && s->as.ret.value != NULL) {
@@ -2273,7 +2330,9 @@ static int compile_function(CompiledProgram *program, int index,
     cg.local_count   = 0;
     cg.phys_count    = 0;
     cg.ret_struct_id = fn->ret_struct_id;   // value-types 3b.4b: multi-slot struct return
+    cg.refine_self_arg = NULL;   // OFI-150: set only while emitting a refinement predicate
     cg.current_line  = fn->line;
+    cg.current_col   = fn->col;
     cg.loop_depth    = 0;
     cg.plan          = plan;
     cg.cur_slot      = index;
@@ -2458,7 +2517,7 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
                     const MonoPlan *plan, const StructLayout *layouts,
                     int layout_count, CompiledProgram *out,
                     const char *source_name) {
-    (void)modules;   // codegen uses the checker's resolved_fn; merged decls suffice
+    // `modules` is used below to stamp each function with its source-file path (OFI-111a).
     compiled_program_init(out);
 
     // Functions and struct methods share one table, numbered together in
@@ -2530,6 +2589,8 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         if (si < layout_count) {
             out->structs[si].total_size = layouts[si].total_size;
             out->structs[si].is_rc      = layouts[si].is_rc;
+            out->structs[si].is_resource = layouts[si].is_resource;
+            out->structs[si].drop_fn    = layouts[si].drop_fn;
             for (int f = 0; f < lf; f++) {
                 out->structs[si].offset[f]       = layouts[si].offset[f];
                 out->structs[si].kind[f]         = layouts[si].kind[f];
@@ -2553,6 +2614,8 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         out->structs[id].field_count = layouts[id].field_count;
         out->structs[id].total_size  = layouts[id].total_size;
         out->structs[id].is_rc       = layouts[id].is_rc;
+        out->structs[id].is_resource = layouts[id].is_resource;
+        out->structs[id].drop_fn     = layouts[id].drop_fn;
         structtype_alloc_fields(&out->structs[id], layouts[id].field_count);
         for (int f = 0; f < layouts[id].field_count; f++) {
             out->structs[id].offset[f]       = layouts[id].offset[f];
@@ -2567,6 +2630,25 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         }
     }
 
+    // OFI-111b: preserve each struct's field names in the runtime StructType so the Fault value
+    // walker can render a struct payload as `Name { field: v, ... }`. The CompiledProgram is
+    // self-contained, so dup the names (the parse arena is gone by run time); a hidden witness
+    // field (index >= the user field count) gets a NULL name.
+    for (int s = 0; s < total_structs; s++) {
+        int lf = out->structs[s].field_count;
+        int nf = cg_structs[s].field_count;
+        out->structs[s].field_names = malloc((size_t)(lf > 0 ? lf : 1) * sizeof(char *));
+        if (out->structs[s].field_names == NULL) {
+            fprintf(stderr, "emberc: out of memory\n");
+            exit(70);
+        }
+        for (int f = 0; f < lf; f++) {
+            out->structs[s].field_names[f] =
+                (f < nf && cg_structs[s].field_names[f] != NULL)
+                    ? dup_str(cg_structs[s].field_names[f]) : NULL;
+        }
+    }
+
     // The enum variant table (compile-time only): every variant of every enum,
     // numbered by DECL_ENUM order — `enum_id` matches the checker and is the
     // OP_NEW_ENUM type id.
@@ -2577,6 +2659,15 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
             fprintf(stderr, "emberc: out of memory\n");
             exit(70);
         }
+    }
+    // OFI-111b: a runtime copy of the variant names, owned by the CompiledProgram, so the Fault
+    // value walker can name an enum payload (Err, NotFound, …) — cg_variants is freed below.
+    out->variant_count = total_variants;
+    out->variants = total_variants > 0
+        ? malloc((size_t)total_variants * sizeof(EnumVariantInfo)) : NULL;
+    if (total_variants > 0 && out->variants == NULL) {
+        fprintf(stderr, "emberc: out of memory\n");
+        exit(70);
     }
     int ei = 0;   // enum id (DECL_ENUM order)
     int vix = 0;  // running index into cg_variants
@@ -2595,6 +2686,10 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
             cg_variants[vix].enum_id       = ei;
             cg_variants[vix].variant_index = (int)v;
             cg_variants[vix].field_count   = (int)d->as.enum_.variants[v].field_count;
+            out->variants[vix].name          = dup_str(d->as.enum_.variants[v].name);   // OFI-111b
+            out->variants[vix].enum_id       = ei;
+            out->variants[vix].variant_index = (int)v;
+            out->variants[vix].field_count   = (int)d->as.enum_.variants[v].field_count;
             const char *vn = d->as.enum_.variants[v].name;
             if (is_result && out->result_enum_id < 0 && strcmp(vn, "Err") == 0) {
                 out->result_enum_id = ei;
@@ -2613,7 +2708,8 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
     // both base slots and the appended generic-instance slots can be filled.
     const FnDecl **fn_by_fi    = malloc((size_t)total_functions * sizeof(FnDecl *));
     const char   **struct_of   = malloc((size_t)total_functions * sizeof(char *));
-    if (fn_by_fi == NULL || struct_of == NULL) {
+    int           *decl_of_fi  = malloc((size_t)total_functions * sizeof(int));   // OFI-111a: fn slot -> decl index
+    if (fn_by_fi == NULL || struct_of == NULL || decl_of_fi == NULL) {
         fprintf(stderr, "emberc: out of memory\n");
         exit(70);
     }
@@ -2623,11 +2719,13 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         if (d->kind == DECL_FN) {
             fn_by_fi[fi]  = &d->as.fn;
             struct_of[fi] = NULL;
+            decl_of_fi[fi] = (int)i;
             fi++;
         } else if (d->kind == DECL_STRUCT) {
             for (size_t m = 0; m < d->as.struct_.method_count; m++) {
                 fn_by_fi[fi]  = &d->as.struct_.methods[m];
                 struct_of[fi] = d->as.struct_.name;
+                decl_of_fi[fi] = (int)i;
                 fi++;
             }
         }
@@ -2642,6 +2740,21 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         out->functions[s].name  = struct_of[b] != NULL ? mangle(struct_of[b], fn->name)
                                                        : dup_str(fn->name);
         out->functions[s].arity = (int)fn->param_count;
+        // OFI-111a: stamp the function's true SOURCE FILE (the module it was declared in) so a Fault
+        // reports the right path in a multi-module program. dup'd → the CompiledProgram stays
+        // self-contained; freed in compiled_program_free.
+        {
+            const char *mpath = source_name;
+            if (fn->src_path != NULL) {
+                mpath = fn->src_path;        // a lifted lambda carries its defining module (OFI-111a)
+            } else if (modules != NULL && modules->count > 0) {
+                int midx = module_of_decl(modules, decl_of_fi[b]);
+                if (modules->modules[midx].path != NULL) {
+                    mpath = modules->modules[midx].path;
+                }
+            }
+            out->functions[s].source_file = dup_str(mpath);
+        }
         chunk_init(&out->functions[s].chunk);
     }
     out->main_index = plan->main_index;
@@ -2651,6 +2764,7 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
         free(cg_variants);
         free(fn_by_fi);
         free(struct_of);
+        free(decl_of_fi);
         return 1;
     }
 
@@ -2666,5 +2780,6 @@ int codegen_program(const Program *ast, const ModuleSet *modules,
     free(cg_variants);
     free(fn_by_fi);
     free(struct_of);
+    free(decl_of_fi);
     return error;
 }

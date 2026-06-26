@@ -12,10 +12,10 @@
 0022    |  GET_LOCAL 1
 0024    |  GET_FIELD 1
 0026    |  ADD      0
-0028    |  DROP     0
-0030    |  DROP     1
+0028    |  DROP     1
+0030    |  DROP     0
 0032    |  RETURN  
 0033    |  CONST    3  (= 0)
-0035    |  DROP     0
-0037    |  DROP     1
+0035    |  DROP     1
+0037    |  DROP     0
 0039    |  RETURN  

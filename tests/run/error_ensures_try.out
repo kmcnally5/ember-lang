@@ -1,3 +1,3 @@
 error[postcondition_failed]: postcondition failed in 'f' (ensures, line 24)
-  --> tests/run/error_ensures_try.em:24 (in f)
+  --> tests/run/error_ensures_try.em:24:24 (in f)
   route:  f (line 24) <- main (line 30)

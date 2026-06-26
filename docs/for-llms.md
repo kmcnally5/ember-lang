@@ -31,16 +31,18 @@ the fragments above it are extracted from programs that do.
 | reassigning a `let` | declare it `var` | `error: cannot assign to an immutable 'let' binding` |
 | `fn f() -> int { 5 }` (last-expr return) | `fn f() -> int { return 5 }` | no implicit last-expression return; `return` is required |
 | `println("x =", n)` | `println("x = {n}")` | `print`/`println` take **exactly one argument**; compose with interpolation |
-| `"{shape}"` where `shape` is a struct/interface | `"{shape.area()}"`, `"{p.x}"` | interpolation renders only a **number, string, or bool** — call a method / read a field |
+| `"{shape}"` where `shape` is a struct/interface | works **if the type has `fn show(self) -> string`** (the `Show` contract); else `"{shape.area()}"`, `"{p.x}"` | bare interpolation renders a number/string/bool directly, or any value whose type provides `show` (structural, like Go's `Stringer` — no `implements Show` needed) |
 | `null`, `nil`, `None` as a bare value | `Option<T>` with `Some(v)` / `None` | there is no null; absence is an `Option` |
 | `String`, `Vec<int>`, `int64`, `double` | `string`, `[int]`, `i64`, `f64` | primitives are lowercase; arrays are `[T]`; `int`=64-bit, `float`=`f64` |
+| `type Id = int` assumed to be a transparent alias (Go/TS `type`) | a **distinct** nominal type: `Id(7)` constructs; `int` and `Id` don't interchange | newtypes erase to the base (zero cost) but the compiler keeps them apart; arithmetic needs an explicit `int(x)` unwrap |
+| a hand-written validated wrapper (private field + checking constructor) | `type Percent = int where 0 <= self && self <= 100` | a **refinement**: the `where` predicate is checked at construction (`Percent(150)` traps `refinement_violation`), elided in `--release` |
 | `ch.send(x)`, `ch.recv()` | `send(ch, x)`, `recv(ch)`, `close(ch)` | channel ops are **free functions**, not methods |
 | `let c = channel(10)` | `let c: Channel<int> = channel(10)` | annotate the element type at the binding (it can't be inferred) |
 | `case X => { … }` (arrow) | `case X { … }` | match arms are `case PATTERN { … }` — **no `=>`** |
 | `impl Trait for T { … }` | put methods **inside** the `struct` body | there are no `impl` blocks (see below) |
 | `0..=3` (inclusive range) | `0..3`, or `0..n+1` | ranges are **half-open**: `0..3` is `0,1,2`; there is no `..=` |
 | `Shape.Origin` / `Shape::Origin` | `Origin` | enum variants are referenced **bare** (a qualified form also parses) |
-| `Circle(radius: 2.0)` (named args) | `Circle(2.0)` | variants are **constructed positionally**, even though their fields are named in the declaration |
+| assuming `Circle(radius: 2.0)` is illegal | `Circle(2.0)` **or** `Circle(radius: 2.0)` | enum variants construct **positionally or by field name** (named mirrors a struct literal) — both are valid |
 | `use std::x`, `from x import y`, `import x` | `import "std/string" as str` | imports are a **quoted path** with an `as` alias |
 
 ## Structs, methods, interfaces — no `impl` blocks

@@ -1862,6 +1862,12 @@ static void handle_references(const JsonValue *id, const JsonValue *params) {
         respond(id, "[]");
         return;
     }
+    if (name[0] == '_' && name[1] == '\0') {
+        // `_` is the write-only DISCARD, not a real symbol — every `_` is independent, so there are
+        // no "references" to collect (and a by-spelling scan would mis-target a duplicate `_`, OFI-097).
+        respond(id, "[]");
+        return;
+    }
     int     n    = 0;
     RefLoc *locs = collect_references(anchor_path, aline, name, &n);
 
@@ -1909,6 +1915,10 @@ static void handle_rename(const JsonValue *id, const JsonValue *params) {
     if (d == NULL || !is_ident(new_name) ||
         !cursor_anchor(d, params, anchor_path, &aline, name, sizeof name)) {
         respond(id, "null");
+        return;
+    }
+    if (name[0] == '_' && name[1] == '\0') {
+        respond(id, "null");   // `_` is the discard, not a renameable symbol (OFI-097)
         return;
     }
     int     n    = 0;

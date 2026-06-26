@@ -1,0 +1,1 @@
+{"severity":"error","category":"contract","code":"refinement_violation","message":"refinement violated constructing 'Pct' (line 12)","file":"tests/fault/refinement_multislot.em","line":12,"col":20,"fn":"main","route":[{"fn":"main","line":12}]}

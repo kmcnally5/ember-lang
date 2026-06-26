@@ -28,6 +28,8 @@ typedef enum {
     TOK_TRUE, TOK_FALSE,
     TOK_IMPORT, TOK_AS,
     TOK_EXTERN,                    // extern "c" { ... } — foreign (C) functions (§5h)
+    TOK_TYPE,                      // type X = Base — a distinct nominal type (OFI-149)
+    TOK_WHERE,                     // type X = Base where P — a refinement predicate (OFI-150)
     TOK_REQUIRES, TOK_ENSURES,     // function contracts (pre/post-conditions)
 
     // Delimiters

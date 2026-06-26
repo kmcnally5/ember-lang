@@ -147,6 +147,10 @@ typedef struct {
     size_t      len;
     int         render_kind;   // numeric kind of an interpolation hole, so codegen
                                // emits OP_TO_STRING with the right (e.g. u64) render
+    int         string_temp;   // 1 if the hole is a fresh OWNED-temp string (a call/concat
+                               // result, incl. a desugared `.show()`): codegen skips the
+                               // retaining OP_TO_STRING since the value already owns a
+                               // reference the fold's OP_CONCAT consumes (else it leaks).
 } StrPart;
 
 struct Expr {
@@ -195,6 +199,11 @@ struct Expr {
             Expr  *callee;
             Expr **args;
             size_t arg_count;
+            // NAMED arguments (OFI-140): for `Circle(radius: 2.0)` enum-variant construction, one entry
+            // per arg — the field name, or NULL for a positional arg. The whole pointer is NULL when no
+            // argument was named (the common case). The checker validates + reorders into declared field
+            // order (named construction is only legal for an enum variant; a function call rejects it).
+            const char **arg_names;
             // Bounded generic call: one witness per (type parameter, bound), in the
             // order the callee expects them as hidden leading arguments (param0's
             // bounds, then param1's, …). Each witness is the concrete type's method
@@ -248,6 +257,8 @@ struct Expr {
             // FFI structs-by-value (3b.6): the Ember struct id the C function RETURNS, so the VM
             // reassembles a struct from the wrapper's result leaves; -1 for a scalar return.
             int         cextern_ret_sid;
+            int         newtype_ctor;   // OFI-149: this call is a newtype construction (codegen passthrough)
+            Expr       *refinement;     // OFI-150: a refined newtype's `where` predicate to check here, or NULL
         } call;
         struct {
             Expr       *object;
@@ -396,6 +407,11 @@ struct Stmt {
                                             // all-scalar struct binding stored MULTI-SLOT
                                             // (its fields exploded on the stack), this is
                                             // the struct type id; -1 = boxed (the usual).
+            int         scalar_kind;        // checker-set (OFI-123): the binding's numeric
+                                            // width kind (int_kind: 0 i64 … 9 f64) when it is
+                                            // a sized scalar, so the NATIVE backend stores it
+                                            // at width (uint8_t/…/float) not a 16-byte Value;
+                                            // -1 for any non-numeric binding.
         } let;
         struct {
             Expr *value;          // NULL for a bare `return`
@@ -495,6 +511,9 @@ typedef struct {
     Block         body;
     int           line;
     int           col;
+    const char   *src_path;  // OFI-111a: defining module's path for a LIFTED LAMBDA (which lands
+                             // outside every ModuleSet range, so module_of_decl can't map it); NULL
+                             // for a normal fn/method (codegen maps those via module_of_decl).
     const char   *doc;     // `///` doc comment, cleaned, or NULL
 } FnDecl;
 
@@ -505,7 +524,8 @@ typedef enum {
     DECL_INTERFACE,
     DECL_IMPORT,
     DECL_LET,        // top-level (global) let/var binding
-    DECL_EXTERN      // extern "c" { fn … } — foreign (C) function signatures (§5h)
+    DECL_EXTERN,     // extern "c" { fn … } — foreign (C) function signatures (§5h)
+    DECL_TYPE        // type UserId = int — a distinct nominal type over a base (OFI-149)
 } DeclKind;
 
 typedef struct Decl Decl;
@@ -528,6 +548,7 @@ struct Decl {
             FnDecl       *methods;
             size_t        method_count;
             int           is_rc;          // `rc struct`: a shared, deeply-immutable, refcounted struct
+            int           is_resource;    // `resource struct`: a uniquely-owned struct with a `drop` (OFI-122)
         } struct_;
         struct {
             const char   *name;
@@ -560,6 +581,11 @@ struct Decl {
             FnDecl     *fns;        // foreign function signatures (has_body = 0)
             size_t      fn_count;
         } extern_;
+        struct {
+            const char *name;       // the newtype's name (e.g. UserId) — OFI-149
+            Type       *base;       // the underlying base type (int, float, bool, …)
+            Expr       *refinement; // OFI-150: the `where` predicate (over `self`), or NULL
+        } type_;
     } as;
 };
 

@@ -1,0 +1,6 @@
+tests/run/error_enum_named.em:16:13: error: this variant has no field named 'c'
+tests/run/error_enum_named.em:17:13: error: field 'a' is set more than once
+tests/run/error_enum_named.em:18:13: error: named construction must set each of the variant's fields exactly once
+tests/run/error_enum_named.em:18:13: error: wrong number of fields for this variant
+tests/run/error_enum_named.em:19:13: error: construction cannot mix positional and named arguments — name every field, or none
+tests/run/error_enum_named.em:20:13: error: named arguments ('name: value') are only valid when constructing an enum variant; function and method calls pass their arguments positionally

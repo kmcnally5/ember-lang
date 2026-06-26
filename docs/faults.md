@@ -67,7 +67,7 @@ costs **nothing** on the hot path: only the body of the already-taken failure br
 
 ## The schema
 
-Defined in [`include/fault.h`](../include/fault.h). A `Fault` carries:
+Defined in [`include/fault.h`](https://github.com/kmcnally5/ember-lang/blob/main/include/fault.h). A `Fault` carries:
 
 | field        | meaning |
 |--------------|---------|
@@ -82,8 +82,8 @@ Defined in [`include/fault.h`](../include/fault.h). A `Fault` carries:
 | `hint`       | a concrete fix in user terms |
 
 Two renderers (`fault_render_human`, `fault_render_agent`) in
-[`src/fault.c`](../src/fault.c) consume one `Fault`. Both escape every string through the
-single shared `json_write_string` ([`src/jsonw.c`](../src/jsonw.c)), so no control/ANSI byte
+[`src/fault.c`](https://github.com/kmcnally5/ember-lang/blob/main/src/fault.c) consume one `Fault`. Both escape every string through the
+single shared `json_write_string` ([`src/jsonw.c`](https://github.com/kmcnally5/ember-lang/blob/main/src/jsonw.c)), so no control/ANSI byte
 can leak into the agent channel. Empty fields are **omitted** from the agent JSON, not
 emitted as `null` — noise hurts a model.
 
@@ -151,5 +151,23 @@ never corrupted.
   because the frames have unwound. VM-only.
 - **Still open — OFI-110(c):** compile-diagnostics → agent Fault render + `Token` byte-spans +
   severity wiring (lower priority — `--diagnostics=json` already serves compile errors).
-- **OFI-111** (struct/enum value walker so an `Err` payload renders as `Err("io")` not
-  `<obj>`; column precision; persisted repro), **OFI-109** (native-backend Fault parity).
+- **Value walker — done (OFI-111b, 2026-06-26).** A non-scalar Err/None payload renders as DATA
+  (`Err("io")`, `MyErr { code: 5 }`, `NotFound("/x")`) via `render_value_into` (src/vm.c): codegen
+  preserves struct field names + enum variant names in the CompiledProgram; nested strings are quoted,
+  a top-level string is not (goldens stay stable); hidden witness fields are skipped; depth + 256-byte
+  budget bounded.
+- **Location precision — done (OFI-111a, 2026-06-26).** A Fault reports the true
+  `file:line:col` of the failing expression (a parallel `Chunk.cols` mirrors `lines`; `Fault.col`
+  renders as `:col` in human, `"col"` in agent) and the true SOURCE FILE of the surfacing function
+  (`Function.source_file`, stamped per module; a lifted lambda carries its own path). The
+  source-excerpt CARET is deferred (the runtime retains no source text). **Still open — OFI-111(d)**
+  (deterministic persisted repro, gated on OFI-044).
+- **Native Faults are intentionally bare — scoped to the VM (OFI-109, decided 2026-06-25).** The
+  bytecode VM is the canonical, rich-diagnostics path (`emberc --emit=run`): it renders the full
+  structured Fault (file/line/route/values, exit 65). The AST→C **native** backend is the
+  differential/release build; a trap there aborts via `em_panic` (a bare message + exit 70), with no
+  frame table or contracts. This is by architecture, not a missing feature — the differential harness
+  compares **stdout** (where program output lives), so a Fault going to stderr is correctly outside its
+  scope. Reach for full native Faults (thread file/line through `em_panic`, emit native contracts, unify
+  exit 65) only if the native backend ever becomes the *primary* implementation; until then, run the VM
+  for rich errors.

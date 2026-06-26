@@ -193,6 +193,14 @@ static const char *PRELUDE_SOURCE =
     "}\n"
     "interface Eq {\n"
     "    fn eq(self, other: Self) -> bool\n"
+    "}\n"
+    // Show: the rendering contract behind string interpolation (OFI-139). A type that
+    // provides `fn show(self) -> string` may be interpolated directly (`"{value}"`) — the
+    // checker desugars the hole to `value.show()`. Detection is structural (the method's
+    // presence is the opt-in, like Go's Stringer), so `implements Show` is NOT required to
+    // interpolate; declaring it lets the type also serve as a `Show` value / a `T: Show` bound.
+    "interface Show {\n"
+    "    fn show(self) -> string\n"
     "}\n";
 
 
@@ -458,18 +466,8 @@ static int emit_bytecode(const TokenList *tokens, const char *name) {
 
 
 
-// render_scalar_into stringifies a scalar/string Value into `buf` for a Fault value field.
-static void render_scalar_into(char *buf, size_t n, Value v) {
-    if (IS_INT(v)) {
-        snprintf(buf, n, "%lld", (long long)AS_INT(v));
-    } else if (IS_FLOAT(v)) {
-        snprintf(buf, n, "%g", AS_FLOAT(v));
-    } else if (IS_STRING(v)) {
-        snprintf(buf, n, "%s", AS_CSTRING(v));
-    } else {
-        snprintf(buf, n, "<obj>");
-    }
-}
+// (OFI-111b) Fault value rendering uses the recursive walker render_value_into (src/vm.c), which
+// renders a struct/enum/array payload as data (e.g. Err("io"), MyErr { code: 5 }) instead of <obj>.
 
 
 
@@ -507,7 +505,7 @@ static int report_unhandled_error(const char *path, const CompiledProgram *prog,
             Value payload;
             memcpy(&payload, e->data, sizeof(Value));   // an enum field is a 16-byte boxed Value
             f.values[0].name = "error";
-            render_scalar_into(f.values[0].rendered, sizeof f.values[0].rendered, payload);
+            render_value_into(f.values[0].rendered, sizeof f.values[0].rendered, payload, prog);
             f.value_count = 1;
         }
     } else {

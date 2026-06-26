@@ -646,6 +646,35 @@ The payoff: an Ember function carries its spec, gets auto-fuzzed into counterexa
 replayable — a feedback loop a model closes on its own. *No mainstream language combines an executable
 spec, a structured trace, and deterministic replay; this is Ember's moat.*
 
+## 5k. Newtypes & refinement types — *decided June 2026 (constraints on data)*
+
+**Two sibling `type` declarations put a constraint on a value's *type*, where contracts (§5e) put
+it on a *function*.** Both make illegal states unrepresentable (§2.3), and both are squarely
+LLM-first (§5b): the surface is `type X = …`, which a zero-shot model already knows from TypeScript,
+Haskell, Gleam, Rust, and Go — little novelty to mispredict.
+
+- **Newtypes** — `type UserId = int`, `type Email = string` — introduce a *distinct nominal* type
+  over a base. A `UserId` is not interchangeable with its base or with an `OrderId`, so passing the
+  wrong one is a compile error: this turns the unit-confusion / swapped-argument bug class (a
+  top-tier human *and* LLM-codegen error) into a caught error, at **zero runtime cost** (a newtype
+  erases to its base). A newtype inherits its base's equality, ordering, hashing, and rendering, so
+  it compares, sorts, keys a `Map`, and interpolates directly; arithmetic requires an explicit
+  unwrap (`int(x)`), because a distinct quantity is not a raw number. Construction is `Name(x)`.
+
+- **Refinement types** — `type Percent = int where 0 <= self && self <= 100` — attach a *predicate*
+  (over `self`) to a numeric/bool base, **checked at construction** by reusing the executable-contract
+  machinery (§5e): debug-checked, release-elided, surfaced as the same structured `Fault` (§5c). A
+  read needs no recheck — *the type is the proof of validity* ("parse, don't validate"). This is the
+  verification & determinism loop (§5j) extended from functions onto **data**: the invariant is
+  stated once and travels with the value everywhere.
+
+**Honesty about scope (§3.4 — features pay for their complexity).** This is deliberately the
+*decidable, runtime-degradable* band, not liquid/dependent types: the predicate is ordinary Ember,
+checked at construction; static *discharge* of that check via the prover is a future bonus, never the
+headline, and the SMT/quantifier completeness chase is explicitly refused (its ergonomics are a
+documented dead end). v1 keeps refinement bases numeric/bool with a pure constructor argument;
+string refinements, refined mutable struct fields, and prover-discharge are later, not foundational.
+
 ## 6. Open questions (to decide next, deliberately)
 
 These are *not yet decided* and should be settled before they're baked into the grammar:

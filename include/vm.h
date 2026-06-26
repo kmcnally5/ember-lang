@@ -43,6 +43,11 @@ int vm_exited(const VM *vm, int *code);
 // `tracer` is non-NULL, one event fires before each instruction (the tape).
 VMResult vm_run(VM *vm, Value *out, const Tracer *tracer);
 
+// OFI-111b: render a runtime Value (incl. structs/enums/arrays) into `buf` for a Fault's
+// `values[]`, using `prog` for struct field + enum variant names. Bounded depth/budget; a bare
+// top-level string is unquoted, nested strings quoted. VM-only (a native binary aborts bare).
+void render_value_into(char *buf, size_t cap, Value v, const CompiledProgram *prog);
+
 // Frees the VM and every heap object it allocated.
 void vm_destroy(VM *vm);
 

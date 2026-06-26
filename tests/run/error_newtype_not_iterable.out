@@ -1,0 +1,1 @@
+tests/run/error_newtype_not_iterable.em:8:5: error: 'for' iterates over an array, a slice, or an integer range

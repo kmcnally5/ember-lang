@@ -8,6 +8,7 @@
 #include "ember_rt.h"   // shared runtime: packed marshalling (value_box/unbox, array_box/unbox),
                         // also the C backend's runtime (M2a). The VM is the reference semantics.
 
+#include <stddef.h>   // offsetof (vm_invoke_drop recovers the VM from its embedded EmberRt)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +86,9 @@ typedef struct Fiber {
     struct Nursery *nursery;     // the group this fiber belongs to (NULL at top level)
     struct Nursery *cur_open;    // innermost nursery this fiber has opened as a parent
     Value          *out;         // where the main fiber's return value is stored
+    int             pin_worker0; // 1 = this fiber resumes ONLY on worker 0 (the calling/GL-context
+                                 // thread): the main fiber, so a graphics render loop's teardown
+                                 // never lands on a helper thread off the GL context (OFI-138/089)
 #endif
 } Fiber;
 
@@ -211,6 +215,8 @@ struct VM {
     Value     *sp;          // current stack top
     CallFrame *frames;      // base of the current fiber's frame array
     int        frame_count;
+    int        reentry_floor;  // OFI-122: run() returns when frame_count drops to this (0 normally; set
+                               // > 0 by vm_invoke_drop so a re-entrant resource `drop` returns to its caller)
     // Nursery group stack: spawned tasks accumulate in the innermost group and
     // are run to completion (and freed) when that nursery's block ends.
     Fiber     *groups[MAX_NURSERY_DEPTH][MAX_GROUP_FIBERS];
@@ -291,6 +297,8 @@ static void runtime_error(const char *msg) {
 typedef struct {
     const char *name;
     int64_t     v;
+    int         is_unsigned;   // render `v`'s bits as u64 (%llu) — for a u64 operand (OFI-110/111c);
+                               // default 0 (signed %lld). Most traps' operands are signed i64.
 } FaultInt;
 
 
@@ -305,6 +313,14 @@ static int fault_line(const CallFrame *frame) {
 }
 
 
+// fault_col mirrors fault_line for the source COLUMN of the failing instruction (OFI-111a).
+static int fault_col(const CallFrame *frame) {
+    const Chunk *chunk = &frame->fn->chunk;
+    size_t off = (size_t)(frame->ip - chunk->code);
+    return chunk->cols != NULL ? chunk->cols[off > 0 ? off - 1 : 0] : 0;
+}
+
+
 
 
 // fault_fill_callstack fills a Fault's primary location (file/fn/line) from `frame` and its
@@ -314,8 +330,12 @@ static int fault_line(const CallFrame *frame) {
 static void fault_fill_callstack(Fault *f, VM *vm, const CallFrame *frame) {
     f->file = g_source_path;
     if (frame != NULL) {
+        if (frame->fn->source_file != NULL) {   // OFI-111a: the function's true module path
+            f->file = frame->fn->source_file;
+        }
         f->fn   = frame->fn->name;
         f->line = fault_line(frame);
+        f->col  = fault_col(frame);
     }
     int r = 0;
     for (int i = vm->frame_count - 1; i >= 0 && r < FAULT_MAX_HOPS; i--, r++) {
@@ -357,8 +377,13 @@ static void runtime_fault(VM *vm, const CallFrame *frame, const char *code,
     int n = nvals < FAULT_MAX_VALUES ? nvals : FAULT_MAX_VALUES;
     for (int i = 0; i < n; i++) {
         f.values[i].name = vals[i].name;
-        snprintf(f.values[i].rendered, sizeof f.values[i].rendered,
-                 "%lld", (long long)vals[i].v);
+        if (vals[i].is_unsigned) {   // a u64 operand renders its bits unsigned, not the i64 view (OFI-110/111c)
+            snprintf(f.values[i].rendered, sizeof f.values[i].rendered,
+                     "%llu", (unsigned long long)vals[i].v);
+        } else {
+            snprintf(f.values[i].rendered, sizeof f.values[i].rendered,
+                     "%lld", (long long)vals[i].v);
+        }
     }
     f.value_count = n;
 
@@ -375,14 +400,14 @@ static void runtime_fault(VM *vm, const CallFrame *frame, const char *code,
 #define OVERFLOW_WHY  "arithmetic requires the result to fit the target integer type"
 #define OVERFLOW_HINT "use a wider integer type, or a wrapping operator (wrapping_add/_sub/_mul) for modular arithmetic"
 
-static void overflow_fault(VM *vm, const CallFrame *frame, int64_t lhs, int64_t rhs) {
-    FaultInt vals[2] = { { "lhs", lhs }, { "rhs", rhs } };
+static void overflow_fault(VM *vm, const CallFrame *frame, int64_t lhs, int64_t rhs, int is_unsigned) {
+    FaultInt vals[2] = { { "lhs", lhs, is_unsigned }, { "rhs", rhs, is_unsigned } };
     runtime_fault(vm, frame, "integer_overflow", "integer overflow",
                   OVERFLOW_WHY, OVERFLOW_HINT, vals, 2);
 }
 
-static void overflow_fault1(VM *vm, const CallFrame *frame, int64_t v) {
-    FaultInt vals[1] = { { "value", v } };
+static void overflow_fault1(VM *vm, const CallFrame *frame, int64_t v, int is_unsigned) {
+    FaultInt vals[1] = { { "value", v, is_unsigned } };
     runtime_fault(vm, frame, "integer_overflow", "integer overflow",
                   OVERFLOW_WHY, OVERFLOW_HINT, vals, 1);
 }
@@ -396,12 +421,205 @@ static void overflow_fault1(VM *vm, const CallFrame *frame, int64_t v) {
 // left UNCHANGED, so the --check classifier (which string-matches the message) is untouched.
 // Only called outside check_mode (OP_CONTRACT_CHECK returns earlier under check_mode). The
 // clause source text as `why` and named param values are a follow-up (OFI-111).
+// ---- Fault value walker (OFI-111b) -----------------------------------------
+// Render a runtime Value — including structs, enums, and arrays — into a fixed buffer for a
+// Fault's values[], so an Err payload shows its data (e.g. MyErr { code: 5 } or NotFound("/x"))
+// instead of the old "<obj>". `prog` supplies struct field names + enum variant names (codegen
+// preserves them in the CompiledProgram; the parse arena is gone by run time). Depth- and
+// budget-bounded; nested strings are quoted but a bare top-level string is not, so the existing
+// unhandled-err goldens (whose payloads are top-level strings) stay byte-stable. VM-only — a
+// native binary aborts via a bare em_panic by design (OFI-109).
+#define FAULT_WALK_MAX_DEPTH 6
+
+typedef struct { char *p; char *end; } FaultSB;   // end = one past the last writable byte (NUL reserved)
+
+static void fsb_raw(FaultSB *sb, const char *s) {
+    while (*s != '\0' && sb->p < sb->end) {
+        *sb->p++ = *s++;
+    }
+}
+
+static void fsb_lld(FaultSB *sb, long long v) {
+    char t[24];
+    snprintf(t, sizeof t, "%lld", v);
+    fsb_raw(sb, t);
+}
+
+static void fsb_llu(FaultSB *sb, unsigned long long v) {
+    char t[24];
+    snprintf(t, sizeof t, "%llu", v);
+    fsb_raw(sb, t);
+}
+
+static void fsb_g(FaultSB *sb, double v) {
+    char t[32];
+    snprintf(t, sizeof t, "%g", v);
+    fsb_raw(sb, t);
+}
+
+static const char *fault_variant_name(const CompiledProgram *prog, int enum_id, int tag) {
+    for (int i = 0; i < prog->variant_count; i++) {
+        if (prog->variants[i].enum_id == enum_id && prog->variants[i].variant_index == tag) {
+            return prog->variants[i].name;
+        }
+    }
+    return NULL;
+}
+
+static void fault_walk_value(FaultSB *sb, Value v, const CompiledProgram *prog, int depth, int top);
+
+static void fault_walk_struct(FaultSB *sb, const unsigned char *data, int type_id,
+                              const CompiledProgram *prog, int depth) {
+    if (type_id < 0 || type_id >= prog->struct_count) {
+        fsb_raw(sb, "<obj>");
+        return;
+    }
+    if (depth > FAULT_WALK_MAX_DEPTH) {   // guard inline-struct chains too (decoupled from front-end caps)
+        fsb_raw(sb, "...");
+        return;
+    }
+    const StructType *st = &prog->structs[type_id];
+    fsb_raw(sb, st->name != NULL ? st->name : "?");
+    fsb_raw(sb, " {");
+    int rendered = 0;
+    for (int i = 0; i < st->field_count; i++) {
+        const char *fname = st->field_names != NULL ? st->field_names[i] : NULL;
+        // A hidden witness field (bounded-generic instance storage) has a NULL name — skip it
+        // entirely (name AND value AND separator) so compiler-internal state never leaks into the
+        // user-/agent-facing render. A user field always carries a name (OFI-111b).
+        if (st->field_names != NULL && fname == NULL) {
+            continue;
+        }
+        fsb_raw(sb, rendered == 0 ? " " : ", ");
+        rendered++;
+        if (sb->p >= sb->end) {
+            break;
+        }
+        if (fname != NULL) {
+            fsb_raw(sb, fname);
+            fsb_raw(sb, ": ");
+        }
+        int kind = st->kind[i];
+        const unsigned char *fp = data + st->offset[i];
+        if (kind == AEK_INLINE_STRUCT) {
+            fault_walk_struct(sb, fp, st->field_struct[i], prog, depth + 1);
+        } else if (kind == AEK_BOXED) {
+            Value fv;
+            memcpy(&fv, fp, sizeof(Value));
+            fault_walk_value(sb, fv, prog, depth + 1, 0);
+        } else if (kind == AEK_BOOL) {
+            Value fv = value_box(fp, kind);
+            fsb_raw(sb, AS_INT(fv) != 0 ? "true" : "false");
+        } else if (kind == AEK_U64) {
+            Value fv = value_box(fp, kind);
+            fsb_llu(sb, (unsigned long long)(uint64_t)AS_INT(fv));
+        } else {
+            Value fv = value_box(fp, kind);
+            if (IS_FLOAT(fv)) {
+                fsb_g(sb, AS_FLOAT(fv));
+            } else {
+                fsb_lld(sb, (long long)AS_INT(fv));
+            }
+        }
+    }
+    fsb_raw(sb, " }");
+}
+
+static void fault_walk_value(FaultSB *sb, Value v, const CompiledProgram *prog, int depth, int top) {
+    if (depth > FAULT_WALK_MAX_DEPTH) {
+        fsb_raw(sb, "...");
+        return;
+    }
+    if (IS_INT(v)) {
+        fsb_lld(sb, (long long)AS_INT(v));
+        return;
+    }
+    if (IS_FLOAT(v)) {
+        fsb_g(sb, AS_FLOAT(v));
+        return;
+    }
+    if (IS_STRING(v)) {
+        if (!top) {
+            fsb_raw(sb, "\"");
+        }
+        fsb_raw(sb, AS_CSTRING(v));
+        if (!top) {
+            fsb_raw(sb, "\"");
+        }
+        return;
+    }
+    if (IS_ARRAY(v)) {
+        ObjArray *a = AS_ARRAY(v);
+        fsb_raw(sb, "[");
+        for (size_t i = 0; i < a->length; i++) {
+            if (i != 0) {
+                fsb_raw(sb, ", ");
+            }
+            if (sb->p >= sb->end) {
+                break;
+            }
+            const unsigned char *ep = (const unsigned char *)a->data + i * a->elem_size;
+            if (a->elem_kind == AEK_INLINE_STRUCT) {
+                fault_walk_struct(sb, ep, a->elem_struct_id, prog, depth + 1);
+            } else {
+                Value e = value_box(ep, a->elem_kind);
+                fault_walk_value(sb, e, prog, depth + 1, 0);
+            }
+        }
+        fsb_raw(sb, "]");
+        return;
+    }
+    if (IS_STRUCT(v)) {
+        ObjStruct *s = AS_STRUCT(v);
+        if (s->is_enum) {
+            const char *vn = fault_variant_name(prog, s->type_id, s->tag);
+            if (vn != NULL) {
+                fsb_raw(sb, vn);
+            } else {
+                fsb_raw(sb, "#");
+                fsb_lld(sb, (long long)s->tag);
+            }
+            if (s->field_count > 0) {
+                fsb_raw(sb, "(");
+                for (int i = 0; i < s->field_count; i++) {
+                    if (i != 0) {
+                        fsb_raw(sb, ", ");
+                    }
+                    if (sb->p >= sb->end) {
+                        break;
+                    }
+                    Value fv;
+                    memcpy(&fv, s->data + (size_t)i * sizeof(Value), sizeof(Value));
+                    fault_walk_value(sb, fv, prog, depth + 1, 0);
+                }
+                fsb_raw(sb, ")");
+            }
+        } else {
+            fault_walk_struct(sb, s->data, s->type_id, prog, depth);
+        }
+        return;
+    }
+    fsb_raw(sb, "<obj>");   // closures, channels, a Ptr handle, … — no readable form
+}
+
+void render_value_into(char *buf, size_t cap, Value v, const CompiledProgram *prog) {
+    if (buf == NULL || cap == 0) {
+        return;
+    }
+    FaultSB sb = { buf, buf + cap - 1 };   // reserve the last byte for the NUL
+    fault_walk_value(&sb, v, prog, 0, 1);
+    *sb.p = '\0';
+}
+
+
 static void contract_fault(VM *vm, const CallFrame *frame, const char *msg) {
     const char *code = "assertion_failed";
     if (strncmp(msg, "precondition", 12) == 0) {
         code = "precondition_failed";
     } else if (strncmp(msg, "postcondition", 13) == 0) {
         code = "postcondition_failed";
+    } else if (strncmp(msg, "refinement", 10) == 0) {
+        code = "refinement_violation";   // OFI-150
     }
     Fault f;
     memset(&f, 0, sizeof f);
@@ -692,7 +910,7 @@ static inline int nk_bits(uint8_t nk) {
                table; i64's bounds are the overflow check itself. */     \
             int64_t r;                                                   \
             if (builtin(AS_INT(va), AS_INT(vb), &r)) {                   \
-                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb));                      \
+                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb), nk == 7);             \
                 return VM_RUNTIME_ERROR;                                 \
             }                                                            \
             if (!push(vm, INT_VAL(r))) {                                 \
@@ -708,7 +926,7 @@ static inline int nk_bits(uint8_t nk) {
             uint64_t ur;                                                 \
             if (builtin((uint64_t)AS_INT(va), (uint64_t)AS_INT(vb),      \
                         &ur)) {                                          \
-                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb));                      \
+                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb), nk == 7);             \
                 return VM_RUNTIME_ERROR;                                 \
             }                                                            \
             if (!push(vm, INT_VAL((int64_t)ur))) {                      \
@@ -718,7 +936,7 @@ static inline int nk_bits(uint8_t nk) {
             int64_t r;                                                   \
             if (builtin(AS_INT(va), AS_INT(vb), &r) ||                   \
                 r < NK_MIN[nk] || r > NK_MAX[nk]) {                      \
-                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb));                      \
+                overflow_fault(vm, frame, AS_INT(va), AS_INT(vb), nk == 7);             \
                 return VM_RUNTIME_ERROR;                                 \
             }                                                            \
             if (!push(vm, INT_VAL(r))) {                                 \
@@ -1316,6 +1534,7 @@ static void *worker_entry(void *p) {
     }
     w->rt.structs      = a->heap->prog->structs;   // shared, read-only layout table
     w->rt.struct_count = a->heap->prog->struct_count;
+    w->rt.invoke       = NULL;   // OFI-122: VM resource-drop invoke wired in a follow-up step
     w->current      = a->fiber;
     w->stack        = a->fiber->stack;
     w->frames       = a->fiber->frames;
@@ -1459,6 +1678,9 @@ typedef struct Scheduler {
     pthread_mutex_t lock;          // guards the ready-queue + the counters below
     pthread_cond_t  nonempty;      // idle workers sleep here; a push / shutdown wakes them
     Fiber          *head, *tail;   // intrusive MPMC ready-queue (FIFO), linked via Fiber.qnext
+    Fiber          *pinned;        // worker-0-ONLY ready slot: a runnable pin_worker0 fiber (the
+                                   // main/GL fiber) waits here so only worker 0 resumes it. Helper
+                                   // workers never service it. Holds 0 or 1 fiber (OFI-138/089).
     int             nworkers;      // M = number of worker threads (≈ ncpu)
     int             nidle;         // workers currently in cond_wait
     long            nready;        // fibers on the ready-queue
@@ -1514,6 +1736,16 @@ static Fiber *ch_unpark(ObjChannel *ch, int is_send) {
 // scheduler lock. The fiber must already be in state READY (the CAS that set it is the gate).
 static void rq_push(Scheduler *s, Fiber *f) {
     pthread_mutex_lock(&s->lock);
+    if (f->pin_worker0) {
+        // The main/GL fiber resumes ONLY on worker 0 (OFI-138/089): park it in the dedicated slot
+        // (it is its sole occupant — fstate gates it to one enqueue at a time) and BROADCAST so the
+        // wake reaches worker 0 even if only helpers were idle. Without the pin, a nursery-join
+        // resume could land the render loop's GL teardown on a helper thread → off-context SEGV.
+        s->pinned = f;
+        pthread_cond_broadcast(&s->nonempty);
+        pthread_mutex_unlock(&s->lock);
+        return;
+    }
     f->qnext = NULL;
     if (s->tail) {
         s->tail->qnext = f;
@@ -1544,38 +1776,52 @@ static int requeue(Scheduler *s, Fiber *f) {
 // left to wake it), the program is stuck. A worker is "idle" only once it is blocked here having
 // found the queue empty AND its last fiber's run() has fully returned (so any park it did is already
 // registered) — therefore n_idle==nworkers with an empty queue is a true, race-free global stall.
-static Fiber *rq_pop(Scheduler *s) {
+static Fiber *rq_pop(Scheduler *s, int is_worker0) {
     pthread_mutex_lock(&s->lock);
-    while (s->head == NULL && !s->shutdown) {
+    for (;;) {
+        // Worker 0 owns the pinned slot (the main/GL fiber): claim it before the shared queue and
+        // before idling, so a parked-then-resumed main always runs on the calling/GL thread. Helper
+        // workers skip this — they must never run a pinned fiber (OFI-138/089).
+        if (is_worker0 && s->pinned != NULL) {
+            Fiber *f = s->pinned;
+            s->pinned = NULL;
+            pthread_mutex_unlock(&s->lock);
+            return f;
+        }
+        if (s->head != NULL) {
+            Fiber *f = s->head;
+            s->head = f->qnext;
+            if (!s->head) {
+                s->tail = NULL;
+            }
+            s->nready--;
+            pthread_mutex_unlock(&s->lock);
+            return f;
+        }
+        if (s->shutdown) {              // shut down (here or elsewhere) → do NOT wait, exit
+            pthread_mutex_unlock(&s->lock);
+            return NULL;
+        }
         s->nidle++;
-        if (s->nidle == s->nworkers && s->nready == 0 && s->live >= 1
+        if (s->nidle == s->nworkers && s->nready == 0 && s->pinned == NULL && s->live >= 1
                 && !s->halting && !s->reported) {
-            // Every worker is idle, nothing is runnable, yet fibers remain (all parked on channels /
-            // nurseries with no one left to wake them): a true global deadlock. Report once + shut down.
+            // Every worker is idle, nothing is runnable (the shared queue AND the worker-0 pinned
+            // slot are empty), yet fibers remain (all parked on channels / nurseries with no one
+            // left to wake them): a true global deadlock. Report once + shut down.
             s->reported = 1;
             s->global_error = VM_RUNTIME_ERROR;
             s->shutdown = 1;
             runtime_error("deadlock: every task in the nursery is blocked");
             pthread_cond_broadcast(&s->nonempty);
         }
-        if (s->shutdown) {              // we just shut down (here or elsewhere) → do NOT wait, exit
+        if (s->shutdown) {
             s->nidle--;
-            break;
+            pthread_mutex_unlock(&s->lock);
+            return NULL;
         }
         pthread_cond_wait(&s->nonempty, &s->lock);
         s->nidle--;
     }
-    Fiber *f = NULL;
-    if (s->head) {
-        f = s->head;
-        s->head = f->qnext;
-        if (!s->head) {
-            s->tail = NULL;
-        }
-        s->nready--;
-    }
-    pthread_mutex_unlock(&s->lock);
-    return f;
 }
 
 
@@ -1691,10 +1937,10 @@ static VMResult run_fiber_once(VM *w, Fiber *f, const Tracer *tracer) {
 // scheduler_worker_main is the loop every worker thread runs (worker 0 = the calling thread). Pop a
 // runnable fiber, win it (READY->RUNNING), run it: VM_YIELD means the fiber already parked + registered
 // itself (on a channel or its nursery) — do nothing; VM_OK/ERROR/CANCELLED means it is finished.
-static void scheduler_worker_main(VM *w, const Tracer *tracer) {
+static void scheduler_worker_main(VM *w, const Tracer *tracer, int is_worker0) {
     Scheduler *s = w->sched;
     for (;;) {
-        Fiber *f = rq_pop(s);
+        Fiber *f = rq_pop(s, is_worker0);
         if (f == NULL) {
             return;   // shutdown
         }
@@ -1731,7 +1977,7 @@ typedef struct { VM *w; const Tracer *tracer; } MNWorkerArg;
 
 static void *mn_worker_entry(void *p) {
     MNWorkerArg *a = (MNWorkerArg *)p;
-    scheduler_worker_main(a->w, a->tracer);
+    scheduler_worker_main(a->w, a->tracer, 0);   // a helper worker — never services the pinned slot
     return NULL;
 }
 #endif
@@ -1952,7 +2198,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     // string/float tag checks and the width-bounds table.
                     int64_t r;
                     if (__builtin_add_overflow(AS_INT(a), AS_INT(b), &r)) {
-                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b));
+                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b), nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL(r))) {
@@ -1977,7 +2223,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     uint64_t ur;
                     if (__builtin_add_overflow((uint64_t)AS_INT(a),
                                                (uint64_t)AS_INT(b), &ur)) {
-                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b));
+                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b), nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL((int64_t)ur))) {
@@ -1987,7 +2233,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     int64_t r;
                     if (__builtin_add_overflow(AS_INT(a), AS_INT(b), &r) ||
                         r < NK_MIN[nk] || r > NK_MAX[nk]) {
-                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b));
+                        overflow_fault(vm, frame, AS_INT(a), AS_INT(b), nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL(r))) {
@@ -2035,7 +2281,8 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 } else if (nk == 7) {                  // u64 unsigned divide
                     uint64_t a = (uint64_t)AS_INT(va), b = (uint64_t)AS_INT(vb);
                     if (b == 0) {
-                        FaultInt vals[2] = { { "divisor", (int64_t)b }, { "dividend", (int64_t)a } };
+                        // The dividend is a genuine u64 — render it unsigned, not its i64 view (OFI-110/111c).
+                        FaultInt vals[2] = { { "divisor", (int64_t)b, 1 }, { "dividend", (int64_t)a, 1 } };
                         runtime_fault(vm, frame, "division_by_zero", "division by zero",
                                       "division requires a non-zero divisor",
                                       "guard the divisor with `if d != 0`, or return a Result for the zero case",
@@ -2048,7 +2295,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 } else {
                     int64_t a = AS_INT(va), b = AS_INT(vb);
                     if (b == 0) {
-                        FaultInt vals[2] = { { "divisor", b }, { "dividend", a } };
+                        FaultInt vals[2] = { { "divisor", b, 0 }, { "dividend", a, 0 } };
                         runtime_fault(vm, frame, "division_by_zero", "division by zero",
                                       "division requires a non-zero divisor",
                                       "guard the divisor with `if d != 0`, or return a Result for the zero case",
@@ -2058,7 +2305,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     // a/b can still leave the width (e.g. i8 -128 / -1 = 128).
                     if ((a == INT64_MIN && b == -1) ||
                         a / b < NK_MIN[nk] || a / b > NK_MAX[nk]) {
-                        overflow_fault(vm, frame, a, b);
+                        overflow_fault(vm, frame, a, b, nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL(a / b))) {
@@ -2072,7 +2319,8 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 int64_t b = AS_INT(pop(vm));
                 int64_t a = AS_INT(pop(vm));
                 if (b == 0) {
-                    FaultInt vals[2] = { { "divisor", b }, { "dividend", a } };
+                    // A u64 dividend renders unsigned (OFI-110/111c); 0/other widths stay signed.
+                    FaultInt vals[2] = { { "divisor", b, nk == 7 }, { "dividend", a, nk == 7 } };
                     runtime_fault(vm, frame, "modulo_by_zero", "modulo by zero",
                                   "modulo requires a non-zero divisor",
                                   "guard the divisor with `if d != 0` before `%`",
@@ -2103,7 +2351,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     }
                 } else if (nk == 7) {                  // -u64 is valid only for 0
                     if (AS_INT(va) != 0) {
-                        overflow_fault1(vm, frame, AS_INT(va));
+                        overflow_fault1(vm, frame, AS_INT(va), nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL(0))) {
@@ -2114,7 +2362,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                     // Negation can leave the width: -INT64_MIN, -(i8 -128) = 128,
                     // or any non-zero unsigned (the result would be negative).
                     if (a == INT64_MIN || -a < NK_MIN[nk] || -a > NK_MAX[nk]) {
-                        overflow_fault1(vm, frame, a);
+                        overflow_fault1(vm, frame, a, nk == 7);
                         return VM_RUNTIME_ERROR;
                     }
                     if (!push(vm, INT_VAL(-a))) {
@@ -2176,7 +2424,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 int64_t a  = AS_INT(pop(vm));
                 int bits = nk_bits(nk);
                 if (nb < 0 || nb >= bits) {
-                    FaultInt vals[2] = { { "shift", nb }, { "width", (int64_t)bits } };
+                    FaultInt vals[2] = { { "shift", nb, 0 }, { "width", (int64_t)bits, 0 } };
                     runtime_fault(vm, frame, "shift_out_of_range", "shift amount out of range",
                                   "shifting requires 0 <= amount < width",
                                   "the shift amount must be in [0, width); mask it or check the range first",
@@ -2197,7 +2445,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 int64_t a  = AS_INT(pop(vm));
                 int bits = nk_bits(nk);
                 if (nb < 0 || nb >= bits) {
-                    FaultInt vals[2] = { { "shift", nb }, { "width", (int64_t)bits } };
+                    FaultInt vals[2] = { { "shift", nb, 0 }, { "width", (int64_t)bits, 0 } };
                     runtime_fault(vm, frame, "shift_out_of_range", "shift amount out of range",
                                   "shifting requires 0 <= amount < width",
                                   "the shift amount must be in [0, width); mask it or check the range first",
@@ -2548,7 +2796,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 ObjArray *a = AS_ARRAY(arr);
                 int64_t i = AS_INT(idx);
                 if (i < 0 || (size_t)i >= a->length) {
-                    FaultInt vals[2] = { { "index", i }, { "len", (int64_t)a->length } };
+                    FaultInt vals[2] = { { "index", i, 0 }, { "len", (int64_t)a->length, 0 } };
                     runtime_fault(vm, frame, "index_out_of_bounds",
                                   "array index out of bounds",
                                   "indexing requires 0 <= index < len",
@@ -2605,7 +2853,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 }
                 int64_t i = AS_INT(idx);
                 if (i < 0 || (size_t)i >= a->length) {
-                    FaultInt vals[2] = { { "index", i }, { "len", (int64_t)a->length } };
+                    FaultInt vals[2] = { { "index", i, 0 }, { "len", (int64_t)a->length, 0 } };
                     runtime_fault(vm, frame, "index_out_of_bounds",
                                   "array index out of bounds",
                                   "indexing requires 0 <= index < len",
@@ -2715,7 +2963,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 }
                 int64_t idx = AS_INT(iv);
                 if (idx < 0 || (size_t)idx >= a->length) {
-                    FaultInt vals[2] = { { "index", idx }, { "len", (int64_t)a->length } };
+                    FaultInt vals[2] = { { "index", idx, 0 }, { "len", (int64_t)a->length, 0 } };
                     runtime_fault(vm, frame, "remove_at_out_of_range",
                                   "remove_at index out of range",
                                   "remove_at requires 0 <= index < len",
@@ -2750,7 +2998,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 ObjArray *a = AS_ARRAY(arr);
                 int64_t lo = AS_INT(lov), hi = AS_INT(hiv);
                 if (lo < 0 || hi < lo || (size_t)hi > a->length) {
-                    FaultInt vals[3] = { { "lo", lo }, { "hi", hi }, { "len", (int64_t)a->length } };
+                    FaultInt vals[3] = { { "lo", lo, 0 }, { "hi", hi, 0 }, { "len", (int64_t)a->length, 0 } };
                     runtime_fault(vm, frame, "slice_out_of_range", "slice bounds out of range",
                                   "slicing requires 0 <= lo <= hi <= len",
                                   "clamp the bounds to 0..len, with lo <= hi",
@@ -2771,7 +3019,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 ObjArray *a = AS_ARRAY(arr);
                 int64_t lo = AS_INT(lov), hi = AS_INT(hiv);
                 if (lo < 0 || hi < lo || (size_t)hi > a->length) {
-                    FaultInt vals[3] = { { "lo", lo }, { "hi", hi }, { "len", (int64_t)a->length } };
+                    FaultInt vals[3] = { { "lo", lo, 0 }, { "hi", hi, 0 }, { "len", (int64_t)a->length, 0 } };
                     runtime_fault(vm, frame, "slice_out_of_range", "slice bounds out of range",
                                   "slicing requires 0 <= lo <= hi <= len",
                                   "clamp the bounds to 0..len, with lo <= hi",
@@ -3003,7 +3251,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 }
                 int64_t v = AS_INT(pop(vm));
                 if (nk != 7 && (v < NK_MIN[nk] || v > NK_MAX[nk])) {
-                    FaultInt vals[3] = { { "value", v }, { "min", NK_MIN[nk] }, { "max", NK_MAX[nk] } };
+                    FaultInt vals[3] = { { "value", v, 0 }, { "min", NK_MIN[nk], 0 }, { "max", NK_MAX[nk], 0 } };
                     runtime_fault(vm, frame, "value_out_of_range",
                                   "value out of range for the target integer type",
                                   "the value must fit the target integer type's range",
@@ -3753,12 +4001,14 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 child->nursery   = nn;
                 child->cur_open  = NULL;
                 child->out       = NULL;
+                child->pin_worker0 = 0;   // a spawned task may run on ANY worker (only main is pinned)
                 child->rt.objects = NULL;
                 for (int c = 0; c < POOL_CLASSES; c++) {
                     child->rt.pool[c] = NULL;
                 }
                 child->rt.structs      = vm->heap->prog->structs;
                 child->rt.struct_count = vm->heap->prog->struct_count;
+                child->rt.invoke       = NULL;   // OFI-122: VM resource-drop invoke wired in a follow-up
                 pthread_mutex_lock(&nn->lock);
                 child->sib_next = nn->children;   // prepend to the group's child list (no cap)
                 nn->children = child;
@@ -4002,7 +4252,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
                 // struct holds no heap refs, so the slots copy by value.
                 int n = (int)operand_read(&frame->ip, OPK_IDX);
                 vm->frame_count--;
-                if (vm->frame_count == 0) {
+                if (vm->frame_count <= vm->reentry_floor) {
                     // Top level: main returns int, a spawned task discards its result —
                     // drop the (ref-free) slots and hand back a unit.
                     vm->sp -= n;
@@ -4021,7 +4271,7 @@ static VMResult run(VM *vm, Value *out, const Tracer *tracer) {
             VM_CASE(OP_RETURN): {
                 Value result = pop(vm);
                 vm->frame_count--;
-                if (vm->frame_count == 0) {
+                if (vm->frame_count <= vm->reentry_floor) {
                     *out = result;
                     return VM_OK;
                 }
@@ -4128,6 +4378,42 @@ void vm_route(const VM *vm, FaultHop *route, int *count) {
 }
 
 
+// vm_invoke_drop runs an Ember function by table index RE-ENTRANTLY from inside the VM — it is the
+// `EmberRt.invoke` the runtime's drop_value calls to run a `resource`'s user `drop(self)` during
+// teardown (OFI-122). It pushes a fresh frame for `fn_index` (a `drop` takes exactly `self`) on TOP of
+// the live call stack, sets `reentry_floor` so the interpreter returns when THAT frame returns (not the
+// whole program), runs it, then restores the caller's stack/frame view. The outer frame is untouched
+// (the drop runs in its own frame above it), so the suspended OP_DROP resumes cleanly. Under the M:N
+// build the rt lives in a fiber (not the VM), so the container_of is invalid — resource drop is
+// deferred there for now (Phase 1); the serial + 1:1-parallel VMs embed the rt in the VM.
+static Value vm_invoke_drop(EmberRt *ctx, int fn_index, Value *args) {
+#if EMBER_MN
+    (void)ctx; (void)fn_index; (void)args;
+    return INT_VAL(0);
+#else
+    VM *vm = (VM *)((char *)ctx - offsetof(VM, rt));
+    int    saved_floor = vm->reentry_floor;
+    Value *saved_sp    = vm->sp;
+    int    saved_fc    = vm->frame_count;
+    const Function *fn = &vm->heap->prog->functions[fn_index];
+    Value *base = vm->sp;
+    base[0]     = args[0];             // self (a resource `drop` is always exactly 1-arg)
+    vm->sp      = base + 1;
+    CallFrame *frame = &vm->frames[vm->frame_count++];
+    frame->fn    = fn;
+    frame->ip    = fn->chunk.code;
+    frame->slots = base;
+    vm->reentry_floor = saved_fc;      // run() returns when the drop frame pops back to here
+    Value out = INT_VAL(0);
+    run(vm, &out, NULL);
+    vm->reentry_floor = saved_floor;
+    vm->sp            = saved_sp;
+    vm->frame_count   = saved_fc;
+    return out;
+#endif
+}
+
+
 VM *vm_create(const CompiledProgram *prog) {
     VM *vm = malloc(sizeof(VM));
     Heap *heap = malloc(sizeof(Heap));
@@ -4157,6 +4443,7 @@ VM *vm_create(const CompiledProgram *prog) {
     main_fiber->cur_open = NULL;
     main_fiber->out      = NULL;
     main_fiber->block_is_send = 0;
+    main_fiber->pin_worker0 = 0;   // vm_run sets it to 1 for the M:N run (the GL-context pin)
 #endif
     RT(vm)->objects     = NULL;          // the main thread's own private arena
     for (int c = 0; c < POOL_CLASSES; c++) {
@@ -4164,6 +4451,8 @@ VM *vm_create(const CompiledProgram *prog) {
     }
     RT(vm)->structs      = prog->structs;   // the layout table the runtime reads (ctx->structs)
     RT(vm)->struct_count = prog->struct_count;
+    RT(vm)->invoke       = vm_invoke_drop;   // OFI-122: run a resource's drop(self) on teardown
+    vm->reentry_floor    = 0;                 // run() returns at frame_count 0 unless a re-entrant drop raises it
     vm->current     = main_fiber;
     main_fiber->block_channel = NULL;
     vm->stack       = main_fiber->stack;     // point the active view at the fiber
@@ -4213,6 +4502,7 @@ VMResult vm_run(VM *vm, Value *out, const Tracer *tracer) {
     pthread_mutex_init(&sched.lock, NULL);
     pthread_cond_init(&sched.nonempty, NULL);
     sched.head = sched.tail = NULL;
+    sched.pinned = NULL;            // the worker-0-only slot for the main/GL fiber (OFI-138/089)
     long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
     int M = (ncpu > 1) ? (int)ncpu : 1;
     if (M > MAX_WORKERS) {
@@ -4235,6 +4525,7 @@ VMResult vm_run(VM *vm, Value *out, const Tracer *tracer) {
     vm->current->frame_count = vm->frame_count;
     vm->current->out    = out;      // capture main's return value
     vm->current->fstate = FS_RUNNING;
+    vm->current->pin_worker0 = 1;   // the main fiber resumes only on worker 0 = this GL-context thread
 
     // Start the M-1 helper workers FIRST (each its own VM sharing the heap + scheduler); they drain
     // the ready-queue, so a fiber main spawns runs immediately.
@@ -4261,9 +4552,10 @@ VMResult vm_run(VM *vm, Value *out, const Tracer *tracer) {
     // The calling thread (= worker 0 = the process MAIN OS thread) runs the MAIN fiber DIRECTLY, not
     // via the ready-queue. This is load-bearing for GUI apps: raylib/GLFW/Cocoa require their calls on
     // the main thread, and the render loop is the main fiber — running it on a helper pthread traps.
-    // (The render loop never parks — it polls with try_recv inside the nursery body — so it stays here
-    // for the whole run. If main DOES park, it is requeued and may resume on any worker, which is fine
-    // for non-GUI code; pinning a parked-then-resumed main to thread 0 is a follow-up, OFI-089.)
+    // The render loop usually never parks (it polls with try_recv inside the nursery body) so it stays
+    // here for the whole run; but if main DOES park (e.g. a nursery join at window-close while a fetch
+    // is in flight), it is now PINNED to worker 0 — rq_push routes it to the dedicated slot and only
+    // this thread resumes it, so the GL teardown can't land on a helper thread (OFI-138/089 closed).
     {
         VMResult mr = run_fiber_once(vm, vm->current, tracer);
         if (vm->exit_requested) {
@@ -4282,7 +4574,7 @@ VMResult vm_run(VM *vm, Value *out, const Tracer *tracer) {
         }
         // VM_YIELD: main parked itself (registered on a channel/nursery); a child will requeue it.
     }
-    scheduler_worker_main(vm, tracer);   // worker 0 then helps drain the pool until shutdown
+    scheduler_worker_main(vm, tracer, 1);   // worker 0 then helps drain the pool (+ its pinned slot)
     for (int i = 1; i < M; i++) {
         if (workers[i] != NULL) {
             pthread_join(threads[i], NULL);

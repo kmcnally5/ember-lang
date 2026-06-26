@@ -132,7 +132,13 @@ nursery spawn move mut self true false import as requires ensures extern`. The t
   by content. **Interpolation** splices an expression into a literal with `{ … }` — the hole
   holds any expression — including one with its own string literals, written with plain quotes
   (`"{a.split(",")}"`) — rendered to a string (int / float / string / **bool** holes, a bool as
-  `true`/`false`) and concatenated. Write `\{`/`\}` for a literal brace. Strings are **UTF-8**. **Methods** split along that line — byte
+  `true`/`false`) and concatenated. Write `\{`/`\}` for a literal brace. A **value type renders
+  itself via `Show`**: give a struct (or interface) a `fn show(self) -> string` method and
+  `"{value}"` works — the compiler desugars the hole to `"{value.show()}"`. Detection is
+  structural (the method's presence is the opt-in, like Go's `Stringer`), so `implements Show`
+  is not required to interpolate; declaring it also lets the type serve as a `Show` value or a
+  `T: Show` bound. A value whose type provides no `show` is a compile error that names the fix.
+  Strings are **UTF-8**. **Methods** split along that line — byte
   level for storage/FFI, code-point level for text: **`s.len()`** (byte count, O(1)),
   **`s.bytes()`** → `[u8]` (raw bytes), **`s.char_count()`** (Unicode code points, O(n)),
   **`s.chars()`** → `[string]` (one string per code point, UTF-8 decoded), **`s.split(sep)`** →
@@ -570,8 +576,9 @@ in Ember over a minimal native base, in a file, and `import` it like any other m
 library ships modules a real 2026 program reaches for, each ordinary Ember pulled in with `import`:
 **`std/json`** (parse/emit), **`std/markdown`** and **`std/highlight`** (Markdown rendering and
 syntax highlighting), **`std/layout`** (a flexbox solver), and — built under `make net` —
-**`std/http`** and **`std/sse`** (an HTTP client and server-sent-event streaming). The graphics and
-UI stack (`std/draw`, `std/ui`, `std/flare`) has its own section, [Graphics & UI](#graphics--ui--flare).
+**`std/http`** and **`std/sse`** (an HTTP client and server-sent-event streaming). Embedded SQL lives
+in **`std/sqlite`** (built under `make db`, backed by a vendored SQLite — see [docs/sqlite.md](sqlite.md)).
+The graphics and UI stack (`std/draw`, `std/ui`, `std/flare`) has its own section, [Graphics & UI](#graphics--ui--flare).
 
 ```ember
 import "std/map" as mp
@@ -787,8 +794,10 @@ object (≈10× smaller than the boxed layout). Such elements are **value types*
 array. (A boxed struct array would forbid binding the element out, since that would alias the
 array's unique owner.) A struct with a **unique-owner** field (a nested struct or array) falls back
 to the boxed layout; a **refcounted** field (a string, enum, or closure) keeps the element inline —
-the index-copy shares it by `incref`. This and packed scalars are the first steps of native layout;
-the value model is otherwise still width-erased.
+the index-copy shares it by `incref`. Packed scalar arrays, inline struct fields, and — in the native
+backend — **scalar locals** (a `u8` local is a `uint8_t`, an `f32` a `float`, etc.) all store at their
+declared width; the bytecode VM keeps its uniform 16-byte value slots (it is the reference interpreter,
+not the layout target), so a width difference is never observable, only the native binary's footprint.
 
 **Storage — inline nested struct fields (value types).** A struct field whose type is another
 **all-scalar struct** is stored **inline**: its packed bytes embed directly in the parent's buffer,
@@ -992,8 +1001,9 @@ it constrains range and type, but every value is the same size at runtime (the v
 width-erased), so packed layout is a later concern. Because the bits are erased, the width is
 carried on the *operations* — arithmetic, ordering comparisons, and display each take the
 operand's width — so a `u64` above 2⁶³ adds, compares, and prints as unsigned, and an `f32` rounds
-to 32-bit after each step. (One current limit of the erased model: a `u64` *literal* can be
-written only up to 2⁶³−1; larger `u64` values are reached by arithmetic or conversion.)
+to 32-bit after each step. A `u64` **literal** may be written across the full unsigned range, up to
+2⁶⁴−1 (`let m: u64 = 18446744073709551615` or `18446744073709551615u64`); the same digits in an
+`int`/`i64` context are a compile error that points you at `u64`.
 
 A **literal** takes its width from context (an annotation, a parameter, or the other operand:
 `let x: u8 = 200`, `f(7)` into a `u8` parameter, `x + 1` where `x` is `u8`) or from a **suffix**
@@ -1033,6 +1043,93 @@ no overflow trap. There is no wrapping `/` or `%` (overflow there isn't a real u
 
 Ownership qualifiers (`mut`/`move`) are **not** part of a type — they are written before a
 parameter binding; see [Ownership](#ownership--runs-mutation--moveborrow-safety-lifetime-inference-designed).
+
+---
+
+## Newtypes — [runs: a distinct nominal type over a base, zero runtime cost]
+
+A `type` declaration introduces a **newtype**: a distinct, named type over a base — a scalar
+(`int`, the explicit widths, `float`/`f32`, `bool`) or `string` — that is **nominally distinct**
+from its base and from every other newtype, yet costs nothing at runtime (a newtype value *is* its
+base value; it erases to the base on both backends).
+
+```ember
+type UserId = int
+type OrderId = int
+type Email = string
+```
+
+Construct one by calling the type name; the argument must be the base type:
+
+```ember
+let u: UserId = UserId(7)
+let e: Email  = Email("a@x.io")
+```
+
+A newtype is **not interchangeable** with its base or with another newtype — a `UserId` cannot be
+passed where an `int` or an `OrderId` is expected, nor compared with one. This turns argument-order
+and unit confusion (a `transfer(to, from, amount)` swap; cents vs dollars) into compile errors, at
+zero cost.
+
+A newtype **inherits its base's** equality (`==`/`!=`), ordering (`<`/`<=`/`>`/`>=`, numeric bases
+only), hashing, and rendering — so newtypes compare, sort, serve as `Map` keys, and interpolate in
+`"{...}"` directly:
+
+```ember
+let a: UserId = UserId(7)
+println("{a == UserId(7)}  {a}")          // true  7
+```
+
+**Arithmetic requires an explicit unwrap** — a newtype is a distinct quantity, not a raw number.
+Unwrap with the base conversion, compute, then re-wrap:
+
+```ember
+type Money = int
+let total: Money = Money(int(Money(500)) + int(Money(250)))   // 750
+```
+
+*Current limitations:* a newtype's base is a scalar or `string`; a `string` newtype has no
+unwrap-to-`string` form yet (compare or interpolate it directly); and a newtype is resolved within
+its declaring module (no `mod.UserId` qualified form yet).
+
+---
+
+## Refinement types — [runs: a `where` predicate checked at construction]
+
+A newtype over a **numeric or bool** base may carry a `where` predicate over `self` — a
+**refinement type**. The predicate (an ordinary bool expression, which may call functions) is
+checked **at construction**; a value that violates it traps with a structured
+`refinement_violation` fault. Once constructed, the value is known to satisfy the predicate, so
+reads need no recheck — *the type is the proof of validity*.
+
+```ember
+type Percent = int where 0 <= self && self <= 100
+type Nat = int where self >= 0
+
+fn main() -> int {
+    let p: Percent = Percent(80)     // ok
+    let n: Nat = Nat(0)              // ok
+    println("{p} {n}")               // 80 0
+    let bad: Percent = Percent(150)  // traps: refinement_violation
+    return 0
+}
+```
+
+Like all contracts, the check runs in debug builds and is **elided in `--release`** (zero cost).
+Arithmetic still requires an explicit unwrap (`int(p)`), since a refinement does not make the type
+a raw number.
+
+The constructor argument of a refined type must be a **simple, pure expression** (a literal,
+variable, field, conversion, or arithmetic over those) — because the predicate re-reads it, a
+computed value must be bound to a `let` first:
+
+```ember
+// let v = compute(); let p = Percent(v)   — not  Percent(compute())
+```
+
+*Current limitations:* refinement predicates are supported on numeric/bool bases (not `string`),
+not on mutable struct fields, and the check is always a runtime check (static discharge via the
+prover is a future addition).
 
 ---
 
@@ -1635,6 +1732,28 @@ owned; immutable values are shared.**
   components, an immutable AST, a persistent (structurally-shared) list or tree. There is no
   in-place mutation, so to "change" one you build a new value (persistent-data-structure style).
   Generic `rc struct`s (`rc struct Box<T>`) are not yet supported — a v1 restriction.
+
+- **`resource struct` (uniquely-owned, with a `drop`).** Prefix a struct with `resource` and give it a
+  `fn drop(self)` to make it the *owned* dual of `rc struct`: a uniquely-owned, **move-only** value that
+  OWNS a resource and releases it automatically. It is the one struct that may hold a `Ptr` (an FFI
+  handle), and its `drop` — which the compiler runs **exactly once, on every path** the value leaves
+  scope, in reverse declaration order — closes that handle. So a value can finally own a C resource (a
+  file, a database connection) with no manual cleanup: `let db = open()?` and the connection closes
+  itself at the brace, *including on an early `?`-return*. The compiler enforces the contract — a `drop`
+  that fails to close its handle is a compile error — and forbids duplication: a resource can't be
+  cloned, stored in a plain struct / array / `Map`, or passed to a generic function (anywhere it might
+  be copied into a second owner that double-frees). It is the blessed tool for **owning an external
+  resource** — the RAII handle. See [Databases](sqlite.md) for the canonical use (`Db`/`Stmt`).
+  Resources in collections (a connection pool) are a later phase.
+
+```ember
+resource struct File {             // uniquely-owned; OWNS a C handle
+    fp: Ptr
+    fn drop(self) {                // runs automatically, exactly once, when a File leaves scope
+        let _ = fclose(self.fp)    // …closing the handle on every path (an early `?` included)
+    }
+}
+```
 
 ```ember
 fn main() -> string {

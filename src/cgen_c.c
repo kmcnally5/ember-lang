@@ -32,6 +32,9 @@ typedef struct {
     char        cname[40];
     int         drop;
     int         multislot_sid;   // a value-type struct binding's type id, else -1
+    int         scalar_kind;     // OFI-123: a sized numeric binding's width kind (int_kind 0..9),
+                                 // so it lowers to a typed C scalar (uint8_t/…/float) stored at
+                                 // width; reads box back to a Value. -1 for a non-numeric binding.
 } CgcBinding;
 
 // Declared (user) field names of a struct, indexed by struct type id — so a struct
@@ -139,6 +142,7 @@ static void cgc_push(CgcGen *g, const char *name, const char *cname, int drop, i
              "%s", cname);
     g->scope[g->scope_len].drop = drop;
     g->scope[g->scope_len].multislot_sid = multislot_sid;
+    g->scope[g->scope_len].scalar_kind = -1;   // default; STMT_LET marks a sized-numeric binding (OFI-123)
     g->scope_len++;
 }
 
@@ -180,6 +184,55 @@ static int cgc_lookup_sid(CgcGen *g, const char *name) {
 }
 
 
+// ---- OFI-123: width-accurate scalar locals ----
+// A sized numeric local lowers to a typed C scalar stored at its declared width; every READ boxes it
+// back to a Value (so all downstream codegen is unchanged), and every WRITE unboxes + truncates to
+// width. The width kind is the checker's int_kind (0 i64, 1 i8, 2 i16, 3 i32, 4 u8, 5 u16, 6 u32,
+// 7 u64, 8 f32, 9 f64). Arithmetic still flows through the Value-world em_add/em_sub/em_mul (width via
+// num_kind), so this is purely a storage change — the C compiler folds the box/unbox round-trips away.
+
+// scalar_ctype maps a width kind to its C storage type.
+static const char *scalar_ctype(int kind) {
+    switch (kind) {
+        case 1: return "int8_t";
+        case 2: return "int16_t";
+        case 3: return "int32_t";
+        case 4: return "uint8_t";
+        case 5: return "uint16_t";
+        case 6: return "uint32_t";
+        case 7: return "uint64_t";
+        case 8: return "float";
+        case 9: return "double";
+        default: return "int64_t";   // 0 = i64
+    }
+}
+
+// The width kind a name is bound to (a typed C scalar), or -1 for a Value/struct binding.
+static int cgc_lookup_scalar_kind(CgcGen *g, const char *name) {
+    int i = cgc_lookup_idx(g, name);
+    return i < 0 ? -1 : g->scope[i].scalar_kind;
+}
+
+// Mark the most-recently-pushed binding as a sized scalar of `kind` (set by STMT_LET right after push).
+static void cgc_mark_top_scalar(CgcGen *g, int kind) {
+    if (g->scope_len > 0) {
+        g->scope[g->scope_len - 1].scalar_kind = kind;
+    }
+}
+
+// emit_scalar_box writes the C expression that boxes a typed scalar local `cn` (width `kind`) back to a
+// Value: a float kind widens to double via FLOAT_VAL; an integer kind reinterprets its bits via INT_VAL
+// (a u64 with the high bit set lands as the correct negative-i64 in-slot pattern; narrower signed types
+// sign-extend, unsigned zero-extend — both via the int64_t cast).
+static void emit_scalar_box(CgcGen *g, int kind, const char *cn) {
+    if (kind == 8 || kind == 9) {
+        fprintf(g->out, "FLOAT_VAL((double)%s)", cn);
+    } else {
+        fprintf(g->out, "INT_VAL((int64_t)%s)", cn);
+    }
+}
+
+
 
 
 
@@ -197,8 +250,8 @@ static int is_value_struct(CgcGen *g, int sid) {
         return 0;
     }
     const StructLayout *L = &g->layouts[sid];
-    if (L->is_rc) {
-        return 0;   // R2: an `rc struct` is BOXED + refcounted (like an enum), never a C value-type
+    if (L->is_rc || L->is_resource) {
+        return 0;   // an `rc struct` (refcounted) or `resource struct` (drop-bearing) is BOXED, never a C value-type
     }
     // A monomorphized generic-struct instance (base_id != its own sid — e.g. Box<int>) is NEVER
     // a value-type here: the native backend ERASES generics (one body per method over a uniform
@@ -1252,6 +1305,10 @@ static void emit_call(CgcGen *g, const Expr *e) {
             fputc(')', g->out);
             return;
         }
+        if (e->as.call.newtype_ctor) {   // OFI-149: newtype construction is a no-op (value IS the base)
+            emit_expr(g, e->as.call.args[0]);
+            return;
+        }
         if (e->as.call.arg_count == 1 && cgc_is_numeric_typename(nm)) {
             fprintf(g->out, "em_conv(");
             emit_expr(g, e->as.call.args[0]);
@@ -1766,9 +1823,11 @@ static void emit_try(CgcGen *g, const Expr *e) {
     cgc_indent(g);
     fputs("}\n", g->out);
     cgc_indent(g);
-    fprintf(g->out, "Value v%d = em_enum_field(&g_em, v%d, 0);\n", p, v);
-    cgc_indent(g);
-    fprintf(g->out, "if (IS_OBJ(v%d)) OBJ_RETAIN(AS_OBJ(v%d));\n", p, p);
+    // OFI-122: TAKE the payload (move a unique-owner aggregate out by nil'ing the enum slot; share a
+    // refcounted one via retain) so the shell-drop below cannot also release it. The old em_enum_field
+    // + blanket OBJ_RETAIN double-dropped a unique-owner payload — a crash for a `resource` (its drop
+    // ran on the enum-drop, then again at the extracted binding's scope exit).
+    fprintf(g->out, "Value v%d = em_enum_take(&g_em, v%d, 0);\n", p, v);
     cgc_indent(g);
     fprintf(g->out, "drop_value(&g_em, v%d);\n", v);
     cgc_indent(g);
@@ -1793,9 +1852,18 @@ static void emit_lambda(CgcGen *g, const Expr *e) {
     const FnDecl *lf = (fi >= 0 && fi < g->total_functions) ? g->fn_by_fi[fi] : NULL;
     for (int i = 0; i < cc; i++) {
         fputs(", ", g->out);
-        const char *cn = (lf != NULL && (size_t)i < lf->param_count)
-                         ? cgc_lookup(g, lf->params[i].name) : NULL;
-        fputs(cn != NULL ? cn : "INT_VAL(0)", g->out);
+        const char *nm = (lf != NULL && (size_t)i < lf->param_count) ? lf->params[i].name : NULL;
+        const char *cn = nm != NULL ? cgc_lookup(g, nm) : NULL;
+        if (cn == NULL) {
+            fputs("INT_VAL(0)", g->out);
+        } else {
+            int sk = cgc_lookup_scalar_kind(g, nm);
+            if (sk >= 0) {
+                emit_scalar_box(g, sk, cn);   // a width-typed scalar capture boxes to a Value (OFI-123)
+            } else {
+                fputs(cn, g->out);            // a Value/struct capture (em_closure retains heap ones)
+            }
+        }
     }
     fputc(')', g->out);
 }
@@ -2108,9 +2176,16 @@ static void emit_interned_str(CgcGen *g, const char *bytes, size_t len) {
 
 static void emit_str_part(CgcGen *g, const StrPart *part) {
     if (part->expr != NULL) {
-        fputs("em_to_string(&g_em, ", g->out);
-        emit_expr(g, part->expr);
-        fprintf(g->out, ", %d)", part->render_kind);
+        if (part->string_temp) {
+            // An owned-temp string hole (a call/concat result, incl. a desugared `.show()`)
+            // already yields an owned reference the fold's em_add consumes — wrapping it in
+            // the retaining em_to_string would leak that reference (OFI-146). Emit it raw.
+            emit_expr(g, part->expr);
+        } else {
+            fputs("em_to_string(&g_em, ", g->out);
+            emit_expr(g, part->expr);
+            fprintf(g->out, ", %d)", part->render_kind);
+        }
     } else {
         emit_interned_str(g, part->text, part->len);
     }
@@ -2148,7 +2223,15 @@ static void emit_string(CgcGen *g, const Expr *e) {
 static void emit_expr_dispatch(CgcGen *g, const Expr *e) {
     switch (e->kind) {
         case EXPR_INT:
-            fprintf(g->out, "INT_VAL(%lldLL)", (long long)e->as.int_lit);
+            // A full-range u64 literal (OFI-123) lands in the signed slot; one bit pattern — INT64_MIN
+            // (the value 2⁶³, written as a `u64`) — would emit `-9223372036854775808LL`, whose MAGNITUDE
+            // overflows signed long long, so clang warns. Emit its bits directly. Every other value's
+            // decimal form is exact and warning-free (e.g. u64-max prints `-1LL`).
+            if (e->as.int_lit == INT64_MIN) {
+                fputs("INT_VAL((int64_t)0x8000000000000000ULL)", g->out);
+            } else {
+                fprintf(g->out, "INT_VAL(%lldLL)", (long long)e->as.int_lit);
+            }
             break;
         case EXPR_FLOAT:
             // 17 significant digits round-trips an IEEE-754 double exactly.
@@ -2181,6 +2264,11 @@ static void emit_expr_dispatch(CgcGen *g, const Expr *e) {
                 // both independent copies — the language's value semantics, with no heap,
                 // no drop, and no move-nil needed.
                 fputs(cn, g->out);
+            } else if (cgc_lookup_scalar_kind(g, e->as.ident) >= 0) {
+                // OFI-123: a sized numeric local is stored at width — box it back to a Value so every
+                // downstream consumer is unchanged. A scalar never moves/aliases (it is copied), so the
+                // moves_local paths below don't apply.
+                emit_scalar_box(g, cgc_lookup_scalar_kind(g, e->as.ident), cn);
             } else if (e->moves_local == 1) {
                 // A MOVE out of the binding: read its value and NIL the slot, so the
                 // binding's later scope-exit drop is a no-op (the new owner frees it).
@@ -2498,6 +2586,14 @@ static void emit_stmt(CgcGen *g, const Stmt *s) {
                 fprintf(g->out, "; em_s%d v%d; em_unbox_struct(&g_em, %d, v%d, (Value*)&v%d, %d); "
                                 "drop_value(&g_em, v%d); v%d; });\n",
                         sid, rv, sid, bv, rv, g->layouts[sid].field_count, bv, rv);
+            } else if (sid < 0 && s->as.let.scalar_kind >= 0) {
+                // OFI-123: a sized numeric binding lowers to a typed C scalar stored AT WIDTH; the
+                // initialiser (a Value) is unboxed + truncated to that width. Reads box it back.
+                int k = s->as.let.scalar_kind;
+                fprintf(g->out, "%s v%d = (%s)%s(", scalar_ctype(k), id, scalar_ctype(k),
+                        (k == 8 || k == 9) ? "AS_FLOAT" : "AS_INT");
+                emit_expr(g, s->as.let.value);
+                fputs(");\n", g->out);
             } else {
                 if (sid >= 0) {
                     fprintf(g->out, "em_s%d v%d = ", sid, id);
@@ -2513,6 +2609,9 @@ static void emit_stmt(CgcGen *g, const Stmt *s) {
             // (string/array, future) marked drop_at_scope_end frees at scope exit.
             int drop = (sid >= 0) ? 0 : s->as.let.drop_at_scope_end;
             cgc_push(g, s->as.let.name, cn, drop, sid);
+            if (sid < 0 && s->as.let.scalar_kind >= 0) {
+                cgc_mark_top_scalar(g, s->as.let.scalar_kind);   // reads/writes of this name box/unbox
+            }
             break;
         }
         case STMT_ASSIGN: {
@@ -2602,6 +2701,19 @@ static void emit_stmt(CgcGen *g, const Stmt *s) {
             if (bi < 0) {
                 cgc_error(g, s->line, "native backend (M2): assignment to unbound '%s'",
                           target->as.ident);
+                break;
+            }
+            if (g->scope[bi].scalar_kind >= 0) {
+                // OFI-123: store to a width-typed scalar local — unbox the RHS Value + truncate to its
+                // declared width. A scalar never owns/drops, so this precedes the value-struct / drop paths.
+                int sk = g->scope[bi].scalar_kind;
+                char cn[sizeof g->scope[0].cname];          // copy before emit_expr (it may realloc scope)
+                snprintf(cn, sizeof cn, "%s", g->scope[bi].cname);
+                cgc_indent(g);
+                fprintf(g->out, "%s = (%s)%s(", cn, scalar_ctype(sk),
+                        (sk == 8 || sk == 9) ? "AS_FLOAT" : "AS_INT");
+                emit_expr(g, s->as.assign.value);
+                fputs(");\n", g->out);
                 break;
             }
             int tsid = g->scope[bi].multislot_sid;
@@ -3199,12 +3311,12 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
         for (int s = 0; s < layout_count; s++) {
             const StructLayout *L = &layouts[s];
             if (L->field_count > 0) {
-                fprintf(out, "    { .field_count = %d, .total_size = %d, .is_rc = %d,"
+                fprintf(out, "    { .field_count = %d, .total_size = %d, .is_rc = %d, .is_resource = %d, .drop_fn = %d,"
                              " .offset = em_s%d_off, .kind = em_s%d_knd, .field_struct = em_s%d_fst },\n",
-                        L->field_count, L->total_size, L->is_rc, s, s, s);
+                        L->field_count, L->total_size, L->is_rc, L->is_resource, L->drop_fn, s, s, s);
             } else {
-                fprintf(out, "    { .field_count = %d, .total_size = %d, .is_rc = %d },\n",
-                        L->field_count, L->total_size, L->is_rc);
+                fprintf(out, "    { .field_count = %d, .total_size = %d, .is_rc = %d, .is_resource = %d, .drop_fn = %d },\n",
+                        L->field_count, L->total_size, L->is_rc, L->is_resource, L->drop_fn);
             }
         }
         fputs("};\n", out);
@@ -3342,6 +3454,7 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
         fputs("    EmTask *t = (EmTask *)p;\n", out);
         fprintf(out, "    g_em.structs = %s;\n", layout_count > 0 ? "em_structs" : "0");
         fprintf(out, "    g_em.struct_count = %d;\n", layout_count);
+        fputs("    g_em.invoke = em_invoke;\n", out);   // OFI-122: lets drop_value run a resource's drop
         fputs("    em_cur_nursery = t->nursery;\n", out);
         fputs("    em_cur_slot = t->slot;\n", out);
         fputs("    (void)em_invoke(&g_em, t->fn_index, t->args);\n", out);
@@ -3367,6 +3480,7 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
         fprintf(out, "    em_argc = argc - 1; em_argv = argv + 1;\n");
         fprintf(out, "    g_em.structs = %s;\n", layout_count > 0 ? "em_structs" : "0");
         fprintf(out, "    g_em.struct_count = %d;\n", layout_count);
+        fputs("    g_em.invoke = em_invoke;\n", out);   // OFI-122: lets drop_value run a resource's drop
         if (mainfn->ret_struct_id >= 0) {
             // main returns a value-type struct: the VM prints `=> <obj>` for it.
             fprintf(out, "    em_s%d r = em_fn_%d();\n", mainfn->ret_struct_id, plan->main_index);

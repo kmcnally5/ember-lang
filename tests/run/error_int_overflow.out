@@ -1,5 +1,5 @@
 error[integer_overflow]: integer overflow
-  --> tests/run/error_int_overflow.em:3 (in main)
+  --> tests/run/error_int_overflow.em:3:34 (in main)
   why:    arithmetic requires the result to fit the target integer type
   values: lhs = 9223372036854775807, rhs = 2
   hint:   use a wider integer type, or a wrapping operator (wrapping_add/_sub/_mul) for modular arithmetic

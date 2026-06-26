@@ -7,6 +7,7 @@
 void chunk_init(Chunk *chunk) {
     chunk->code      = NULL;
     chunk->lines     = NULL;
+    chunk->cols      = NULL;
     chunk->code_len  = 0;
     chunk->code_cap  = 0;
     chunk->consts    = NULL;
@@ -24,6 +25,7 @@ void chunk_init(Chunk *chunk) {
 void chunk_free(Chunk *chunk) {
     free(chunk->code);
     free(chunk->lines);
+    free(chunk->cols);
     free(chunk->consts);
     for (size_t i = 0; i < chunk->string_len; i++) {
         free(chunk->strings[i].data);
@@ -36,20 +38,23 @@ void chunk_free(Chunk *chunk) {
 
 
 
-void chunk_write(Chunk *chunk, uint8_t byte, int line) {
+void chunk_write(Chunk *chunk, uint8_t byte, int line, int col) {
     if (chunk->code_len == chunk->code_cap) {
         size_t new_cap = chunk->code_cap ? chunk->code_cap * 2 : 16;
         uint8_t *grown_code = realloc(chunk->code, new_cap);
         int *grown_lines = realloc(chunk->lines, new_cap * sizeof(int));
-        if (grown_code == NULL || grown_lines == NULL) {
+        int *grown_cols = realloc(chunk->cols, new_cap * sizeof(int));
+        if (grown_code == NULL || grown_lines == NULL || grown_cols == NULL) {
             fprintf(stderr, "emberc: out of memory writing bytecode\n");
             exit(70);
         }
         chunk->code     = grown_code;
         chunk->lines    = grown_lines;
+        chunk->cols     = grown_cols;
         chunk->code_cap = new_cap;
     }
     chunk->lines[chunk->code_len] = line;
+    chunk->cols[chunk->code_len]  = col;
     chunk->code[chunk->code_len]  = byte;
     chunk->code_len++;
 }

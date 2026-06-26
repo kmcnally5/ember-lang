@@ -8,6 +8,8 @@
 // program's function table.
 typedef struct {
     char *name;
+    char *source_file;   // OFI-111a: canonical path of the module this fn was declared in (owned);
+                         // a Fault uses it so a multi-module trap reports the right file, not the entry.
     int   arity;
     Chunk chunk;
     // Verification loop (§5j, `--check`): a free, non-generic function whose parameters are all
@@ -48,6 +50,10 @@ typedef struct {
     int   is_rc;         // `rc struct`: a shared, refcounted, deeply-immutable struct — drop_value
                          // reclaims it at the LAST owner (gated on the refcount) like an enum, and
                          // own_into_slot RETAINS rather than deep-clones it. 0 for an ordinary struct.
+    int   is_resource;   // `resource struct` (OFI-122): a uniquely-owned, drop-bearing struct — at
+                         // drop_value the runtime runs drop_fn (the user `drop`), then releases the
+                         // boxed fields and reclaims. Always boxed (never a C value-type). 0 otherwise.
+    int   drop_fn;       // the `drop` method's function-table index (resource only), else -1.
     // Per-field layout, dynamically sized to field_count (no EMBER_MAX_FIELDS cap — a struct may have
     // any number of fields; the field-index operands are LEB128 OPK_IDX). Owned by the CompiledProgram
     // and released by compiled_program_free. Accessed by index (offset[i]), identical to an array.
@@ -55,6 +61,8 @@ typedef struct {
     int  *kind;          // ArrayElemKind per field (0 = boxed Value)
     int  *field_struct;  // for an AEK_INLINE_STRUCT field (value-types 3b.5): the nested struct's type
                          // id, so the VM can materialise a copy on read / size the inline bytes; -1 otherwise
+    char **field_names;  // OFI-111b: per-field name (dup'd; sized to field_count; NULL for a hidden
+                         // witness field), so the Fault value walker can render `Name { field: v, ... }`.
 } StructType;
 
 // The packed layout codegen copies into a StructType. The checker computes it
@@ -68,6 +76,9 @@ typedef struct {
     int base_id;                    // declared struct this layout belongs to/specialises
     int is_rc;                      // `rc struct` (copied into StructType.is_rc); the native backend
                                     // reads it via is_value_struct to box rather than value-type it
+    int is_resource;                // `resource struct` (copied into StructType.is_resource); also
+                                    // forces boxing via is_value_struct so the drop hook can fire
+    int drop_fn;                    // the `drop` method's fn-table index (resource only), else -1
     // Per-field layout, sized to field_count (no cap). The checker arena-allocates these in
     // build_layouts, so the StructLayout array can be freed with a plain free() and the per-entry
     // arrays are reclaimed wholesale at arena_free (which runs after codegen has read them).
@@ -75,6 +86,17 @@ typedef struct {
     int *kind;
     int *field_struct;              // nested struct id for an AEK_INLINE_STRUCT field, else -1
 } StructLayout;
+
+// OFI-111b: an enum variant's runtime identity + name, preserved so the Fault value walker can
+// render an enum payload by name (Err("io"), NotFound("/x")) — codegen otherwise discards variant
+// names after lowering. `enum_id` matches an enum instance's ObjStruct.type_id and `variant_index`
+// its tag.
+typedef struct {
+    char *name;
+    int   enum_id;
+    int   variant_index;
+    int   field_count;
+} EnumVariantInfo;
 
 // A whole compiled program: the function table, the struct-type table, and the
 // index of the entry point `main`. This is the artifact codegen produces and the
@@ -94,6 +116,9 @@ typedef struct {
     int         err_tag;
     int         option_enum_id;
     int         none_tag;
+    // OFI-111b: enum variant table (variant name by enum_id+tag), owned, for Fault value rendering.
+    EnumVariantInfo *variants;
+    int          variant_count;
 } CompiledProgram;
 
 void compiled_program_init(CompiledProgram *prog);

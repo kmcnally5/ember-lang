@@ -23,7 +23,10 @@ Website: **[ember-lang.org](https://ember-lang.org)**
   shared or graph-shaped data, Ember provides blessed tools: `rc struct` (shared immutable structs)
   and `std/slotmap` (a generational arena).
 - **A real type system.** Generics with bounds, enums with exhaustive pattern matching,
-  `Option`/`Result` with `?`, interfaces with both static and dynamic dispatch.
+  `Option`/`Result` with `?`, interfaces with both static and dynamic dispatch, and zero-cost
+  **newtypes** (`type UserId = int`) with **refinement types**
+  (`type Percent = int where 0 <= self && self <= 100`) that turn unit/range mistakes into
+  compile-time or construction-time errors.
 - **Concurrency that's structured.** `nursery`/`spawn`/typed channels, with an M:N green-thread
   scheduler — data-race-free because the only shared mutable state is an atomic refcount.
 - **Verification built in.** Executable `requires`/`ensures` contracts fused with an execution

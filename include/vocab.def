@@ -59,6 +59,8 @@ EMBER_KEYWORD(TOK_STRUCT,     "struct",     "declaration", "`struct` — declare
 EMBER_KEYWORD(TOK_ENUM,       "enum",       "declaration", "`enum` — declare a tagged-union type with variants.")
 EMBER_KEYWORD(TOK_INTERFACE,  "interface",  "declaration", "`interface` — declare a set of methods a type can implement.")
 EMBER_KEYWORD(TOK_EXTERN,     "extern",     "declaration", "`extern \"c\"` — declare foreign C functions (FFI).")
+EMBER_KEYWORD(TOK_TYPE,       "type",       "declaration", "`type UserId = int` — declare a distinct nominal type over a base type (zero runtime cost).")
+EMBER_KEYWORD(TOK_WHERE,      "where",      "declaration", "`type Percent = int where 0 <= self and self <= 100` — a refinement predicate checked at construction.")
 
 EMBER_KEYWORD(TOK_NURSERY,    "nursery",    "concurrency", "`nursery` — a structured-concurrency scope that joins its spawned fibers.")
 EMBER_KEYWORD(TOK_SPAWN,      "spawn",      "concurrency", "`spawn` — start a concurrent fiber inside a `nursery`.")

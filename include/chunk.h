@@ -24,6 +24,7 @@ typedef struct {
 typedef struct {
     uint8_t     *code;
     int         *lines;    // source line for each code byte (parallel to `code`)
+    int         *cols;     // source column for each code byte (parallel to `code`) — OFI-111a
     size_t       code_len;
     size_t       code_cap;
     Value       *consts;
@@ -38,9 +39,10 @@ void chunk_init(Chunk *chunk);
 void chunk_free(Chunk *chunk);
 
 // Appends one byte (an opcode or operand) to the code stream, recording the
-// source `line` it was lowered from. This source-position table is the
-// foundation for the execution tape and any future debugger (MANIFESTO §5d).
-void chunk_write(Chunk *chunk, uint8_t byte, int line);
+// source `line`/`col` it was lowered from. This source-position table is the
+// foundation for the execution tape, Fault locations (OFI-111a), and any future
+// debugger (MANIFESTO §5d).
+void chunk_write(Chunk *chunk, uint8_t byte, int line, int col);
 
 // Adds a constant to the pool and returns its index for OP_CONST.
 size_t chunk_add_const(Chunk *chunk, Value value);

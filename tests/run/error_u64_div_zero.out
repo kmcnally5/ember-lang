@@ -1,0 +1,5 @@
+error[division_by_zero]: division by zero
+  --> tests/run/error_u64_div_zero.em:6:17 (in main)
+  why:    division requires a non-zero divisor
+  values: divisor = 0, dividend = 18000000000000000000
+  hint:   guard the divisor with `if d != 0`, or return a Result for the zero case

@@ -9,6 +9,9 @@
 #if EMBER_NET
 #include <curl/curl.h>   // opt-in HTTPS via libcurl (make net) — "execute C libraries from Ember"
 #endif
+#if EMBER_SQLITE
+#include "sqlite3.h"     // opt-in embedded SQL via the vendored SQLite amalgamation (make db)
+#endif
 
 // Pointer-leaf helpers (§5h pointers). A 'P' (opaque Ptr) leaf carries a C pointer in the int64
 // slot; 'b' (buffer) and 'p' (const char*) leaves arrive as the Ember heap Value itself, which
@@ -434,6 +437,188 @@ static int w_http_close(const Value *a, Value *o) {
 #endif  // EMBER_NET
 
 
+#if EMBER_SQLITE
+// ---- Embedded SQL via the vendored SQLite amalgamation (the std/sqlite binding, `make db`) ------
+// SQLite is the one database that fits Ember's empty-dependency-tree rule: a single public-domain
+// translation unit (third_party/sqlite/sqlite3.c), no server, no system package. These wrappers are
+// the leaf-FFI image of its C API — a connection (sqlite3*) and a prepared statement (sqlite3_stmt*)
+// each cross as an opaque 'P' handle, which makes them LINEAR on the Ember side: the compiler proves
+// every open() is closed and every prepare() is finalized, on every path (OFI-049). Text crosses the
+// boundary copied-and-freed ('p' out, ret_is_string=1); a borrowed 'P' is never owned by C past the
+// call. The Result-returning, `?`-friendly Ember surface is std/sqlite.em layered on top.
+
+// sqlite_open(path) -> Ptr. Opens `path` (creating the file if absent) and returns the connection
+// handle. SQLite hands back a usable handle even when open fails, so sqlite_errmsg still works; only
+// an out-of-memory open yields NULL (which sqlite_errcode reports as an error below).
+static int w_sqlite_open(const Value *a, Value *o) {
+    sqlite3 *db = NULL;
+    sqlite3_open_v2((const char *)AS_CSTRING(a[0]), &db,
+                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+    o[0] = PTR_VAL(db);
+    return 1;
+}
+
+// sqlite_close(db) -> int. Closes the connection; close_v2 tolerates statements that outlive it,
+// finalizing them lazily. Returns the SQLite result code. A null handle is a safe no-op.
+static int w_sqlite_close(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_close_v2((sqlite3 *)AS_CPTR(a[0])));
+    return 1;
+}
+
+// sqlite_errcode(db) -> int. The extended result code of the most recent failed call on `db`
+// (SQLITE_OK == 0 means no error). std/sqlite uses this to turn a bad open()/prepare() into an Err.
+static int w_sqlite_errcode(const Value *a, Value *o) {
+    sqlite3 *db = (sqlite3 *)AS_CPTR(a[0]);
+    o[0] = INT_VAL((int64_t)(db != NULL ? sqlite3_extended_errcode(db) : SQLITE_NOMEM));
+    return 1;
+}
+
+// sqlite_errmsg(db) -> string. The English message for the most recent error on `db`, copied into
+// an Ember string (ret_is_string copies the buffer in and frees the strdup).
+static int w_sqlite_errmsg(const Value *a, Value *o) {
+    sqlite3     *db = (sqlite3 *)AS_CPTR(a[0]);
+    const char  *m  = db != NULL ? sqlite3_errmsg(db) : "null database handle";
+    o[0] = PTR_VAL(strdup(m != NULL ? m : "unknown error"));
+    return 1;
+}
+
+// sqlite_errstr(code) -> string. The English text for a bare result code (no handle needed) — used
+// to describe a step() failure, which holds only the statement, not its connection.
+static int w_sqlite_errstr(const Value *a, Value *o) {
+    const char *m = sqlite3_errstr((int)AS_INT(a[0]));
+    o[0] = PTR_VAL(strdup(m != NULL ? m : "unknown error"));
+    return 1;
+}
+
+// sqlite_exec(db, sql) -> int. Runs one or more semicolon-separated statements that return no rows
+// (DDL, INSERT/UPDATE/DELETE) in a single call, returning the SQLite result code — this is what makes
+// running a whole schema script one line. The reason for a failure is read back with sqlite_errmsg.
+static int w_sqlite_exec(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_exec((sqlite3 *)AS_CPTR(a[0]),
+                                         (const char *)AS_CSTRING(a[1]), NULL, NULL, NULL));
+    return 1;
+}
+
+// sqlite_prepare(db, sql) -> Ptr. Compiles the FIRST statement of `sql` into a prepared-statement
+// handle, returning NULL on a compile error (the reason is then in sqlite_errmsg(db)). Only the first
+// statement is compiled — multi-statement scripts go through sqlite_exec.
+static int w_sqlite_prepare(const Value *a, Value *o) {
+    sqlite3_stmt *st = NULL;
+    sqlite3_prepare_v2((sqlite3 *)AS_CPTR(a[0]), (const char *)AS_CSTRING(a[1]), -1, &st, NULL);
+    o[0] = PTR_VAL(st);
+    return 1;
+}
+
+// sqlite_bind_int(stmt, idx, val) -> int. Binds a 64-bit integer to parameter `idx` (1-based).
+static int w_sqlite_bind_int(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_bind_int64((sqlite3_stmt *)AS_CPTR(a[0]),
+                                               (int)AS_INT(a[1]), AS_INT(a[2])));
+    return 1;
+}
+
+// sqlite_bind_f64(stmt, idx, val) -> int. Binds a double to parameter `idx` (1-based).
+static int w_sqlite_bind_f64(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_bind_double((sqlite3_stmt *)AS_CPTR(a[0]),
+                                                (int)AS_INT(a[1]), AS_FLOAT(a[2])));
+    return 1;
+}
+
+// sqlite_bind_text(stmt, idx, val) -> int. Binds a text value to parameter `idx` (1-based).
+// SQLITE_TRANSIENT tells SQLite to COPY the bytes, so the borrowed Ember string need not outlive the
+// call.
+static int w_sqlite_bind_text(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_bind_text((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1]),
+                                              (const char *)AS_CSTRING(a[2]), -1, SQLITE_TRANSIENT));
+    return 1;
+}
+
+// sqlite_bind_null(stmt, idx) -> int. Binds SQL NULL to parameter `idx` (1-based).
+static int w_sqlite_bind_null(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_bind_null((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1])));
+    return 1;
+}
+
+// sqlite_step(stmt) -> int. Advances to the next result row, returning SQLITE_ROW (100) when a row is
+// ready, SQLITE_DONE (101) when the statement has finished, or an error code. std/sqlite maps these
+// onto Result<bool, string> so a `?`-driven loop reads naturally.
+static int w_sqlite_step(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_step((sqlite3_stmt *)AS_CPTR(a[0])));
+    return 1;
+}
+
+// sqlite_reset(stmt) -> int. Resets a statement to its initial state and clears its parameter
+// bindings, so it can be re-bound and re-stepped (a loop of INSERTs reuses one compiled statement).
+static int w_sqlite_reset(const Value *a, Value *o) {
+    sqlite3_stmt *st = (sqlite3_stmt *)AS_CPTR(a[0]);
+    int rc = sqlite3_reset(st);
+    sqlite3_clear_bindings(st);
+    o[0] = INT_VAL((int64_t)rc);
+    return 1;
+}
+
+// sqlite_column_count(stmt) -> int. The number of result columns produced by the current row.
+static int w_sqlite_column_count(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_column_count((sqlite3_stmt *)AS_CPTR(a[0])));
+    return 1;
+}
+
+// sqlite_column_type(stmt, col) -> int. The storage class of column `col` (0-based) in the current
+// row: 1 INTEGER, 2 FLOAT, 3 TEXT, 4 BLOB, 5 NULL (the SQLITE_* datatype constants).
+static int w_sqlite_column_type(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_column_type((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1])));
+    return 1;
+}
+
+// sqlite_column_int(stmt, col) -> int. Column `col` (0-based) of the current row as a 64-bit integer.
+static int w_sqlite_column_int(const Value *a, Value *o) {
+    o[0] = INT_VAL(sqlite3_column_int64((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1])));
+    return 1;
+}
+
+// sqlite_column_f64(stmt, col) -> f64. Column `col` (0-based) of the current row as a double.
+static int w_sqlite_column_f64(const Value *a, Value *o) {
+    o[0] = FLOAT_VAL(sqlite3_column_double((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1])));
+    return 1;
+}
+
+// sqlite_column_text(stmt, col) -> string. Column `col` (0-based) of the current row as text, copied
+// into an Ember string. A NULL column comes back as "" (test sqlite_column_type for a true NULL).
+static int w_sqlite_column_text(const Value *a, Value *o) {
+    const unsigned char *t = sqlite3_column_text((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1]));
+    o[0] = PTR_VAL(strdup(t != NULL ? (const char *)t : ""));
+    return 1;
+}
+
+// sqlite_column_name(stmt, col) -> string. The name of result column `col` (0-based), copied into an
+// Ember string — the basis for a future Map<string, _> row helper.
+static int w_sqlite_column_name(const Value *a, Value *o) {
+    const char *n = sqlite3_column_name((sqlite3_stmt *)AS_CPTR(a[0]), (int)AS_INT(a[1]));
+    o[0] = PTR_VAL(strdup(n != NULL ? n : ""));
+    return 1;
+}
+
+// sqlite_finalize(stmt) -> int. Destroys a prepared statement and releases its resources. A null
+// handle is a safe no-op, so a failed prepare() can still be finalized to satisfy linearity.
+static int w_sqlite_finalize(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_finalize((sqlite3_stmt *)AS_CPTR(a[0])));
+    return 1;
+}
+
+// sqlite_changes(db) -> int. The number of rows inserted, updated, or deleted by the most recent
+// statement on `db` — what exec() reports back to the caller.
+static int w_sqlite_changes(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_changes((sqlite3 *)AS_CPTR(a[0])));
+    return 1;
+}
+
+// sqlite_last_insert_rowid(db) -> int. The ROWID of the most recent successful INSERT on `db`.
+static int w_sqlite_last_insert_rowid(const Value *a, Value *o) {
+    o[0] = INT_VAL((int64_t)sqlite3_last_insert_rowid((sqlite3 *)AS_CPTR(a[0])));
+    return 1;
+}
+#endif  // EMBER_SQLITE
+
+
 static const CExternSig g_sigs[] = {
     { "sin",   1, { 'f' },                1, { 'f' }, 0, 0 },
     { "cos",   1, { 'f' },                1, { 'f' }, 0, 0 },
@@ -476,6 +661,32 @@ static const CExternSig g_sigs[] = {
     { "http_status", 1, { 'P' },           1, { 'i' }, 0, 0 },
     { "http_close",  1, { 'P' },           1, { 'i' }, 0, 0 },
 #endif
+#if EMBER_SQLITE
+    // Embedded SQL via the vendored SQLite amalgamation (make db). A connection and a statement are
+    // opaque 'P' handles; text crosses copied-and-freed ('p' out, ret_is_string=1).
+    { "sqlite_open",              1, { 'p' },           1, { 'P' }, 0, 0 },
+    { "sqlite_close",             1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_errcode",           1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_errmsg",            1, { 'P' },           1, { 'p' }, 0, 1 },
+    { "sqlite_errstr",            1, { 'i' },           1, { 'p' }, 0, 1 },
+    { "sqlite_exec",              2, { 'P', 'p' },      1, { 'i' }, 0, 0 },
+    { "sqlite_prepare",           2, { 'P', 'p' },      1, { 'P' }, 0, 0 },
+    { "sqlite_bind_int",          3, { 'P', 'i', 'i' }, 1, { 'i' }, 0, 0 },
+    { "sqlite_bind_f64",          3, { 'P', 'i', 'f' }, 1, { 'i' }, 0, 0 },
+    { "sqlite_bind_text",         3, { 'P', 'i', 'p' }, 1, { 'i' }, 0, 0 },
+    { "sqlite_bind_null",         2, { 'P', 'i' },      1, { 'i' }, 0, 0 },
+    { "sqlite_step",              1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_reset",             1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_column_count",      1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_column_type",       2, { 'P', 'i' },      1, { 'i' }, 0, 0 },
+    { "sqlite_column_int",        2, { 'P', 'i' },      1, { 'i' }, 0, 0 },
+    { "sqlite_column_f64",        2, { 'P', 'i' },      1, { 'f' }, 0, 0 },
+    { "sqlite_column_text",       2, { 'P', 'i' },      1, { 'p' }, 0, 1 },
+    { "sqlite_column_name",       2, { 'P', 'i' },      1, { 'p' }, 0, 1 },
+    { "sqlite_finalize",          1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_changes",           1, { 'P' },           1, { 'i' }, 0, 0 },
+    { "sqlite_last_insert_rowid", 1, { 'P' },           1, { 'i' }, 0, 0 },
+#endif
 };
 
 
@@ -488,6 +699,15 @@ static const CExternFn g_fns[] = {
     w_http_post,
     w_http_get,
     w_http_open, w_http_next, w_http_status, w_http_close,
+#endif
+#if EMBER_SQLITE
+    w_sqlite_open, w_sqlite_close, w_sqlite_errcode, w_sqlite_errmsg, w_sqlite_errstr,
+    w_sqlite_exec, w_sqlite_prepare,
+    w_sqlite_bind_int, w_sqlite_bind_f64, w_sqlite_bind_text, w_sqlite_bind_null,
+    w_sqlite_step, w_sqlite_reset,
+    w_sqlite_column_count, w_sqlite_column_type, w_sqlite_column_int, w_sqlite_column_f64,
+    w_sqlite_column_text, w_sqlite_column_name,
+    w_sqlite_finalize, w_sqlite_changes, w_sqlite_last_insert_rowid,
 #endif
 };
 

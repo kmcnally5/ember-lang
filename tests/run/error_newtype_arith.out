@@ -1,0 +1,1 @@
+tests/run/error_newtype_arith.em:7:13: error: arithmetic on a newtype requires unwrapping to its base first (e.g. `int(x)`), then re-wrapping the result

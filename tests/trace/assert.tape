@@ -1,5 +1,5 @@
 error[assertion_failed]: n must be four
-  --> tests/trace/assert.em:5 (in main)
+  --> tests/trace/assert.em:5:17 (in main)
 {"fn":"main","ip":0,"op":"CONST","line":4,"stack":[]}
 {"fn":"main","ip":2,"op":"GET_LOCAL","line":5,"stack":[3]}
 {"fn":"main","ip":4,"op":"CONST","line":5,"stack":[3,3]}

@@ -1,4 +1,7 @@
-build: model=llama3.2 stream=true nmsg=3 r0=system r1=user r2=assistant
+build: model=llama3.2 stream=true nmsg=3 r0=system r1=user r2=assistant tools=false
 bare: nmsg=2 r0=user stream=false
+tools: present=true fn0=read_file
+toolmap: r0=user r1=assistant r1_calls=true r2=tool r2_id=call_9
+toolacc: id=call_7 name=read_file args=AAABBBCCC seen=true
 httpget: refused_handled=true
 => 0

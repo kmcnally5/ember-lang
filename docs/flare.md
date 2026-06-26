@@ -102,7 +102,7 @@ fn main() -> int {
 ```
 
 A full app built on Flare — a switchable conversation list, a scrollable transcript, a composer, and a
-settings **modal** of **segmented** controls — is [`public/claude-desktop/flare_chat.em`](../public/claude-desktop/flare_chat.em).
+settings **modal** of **segmented** controls — is [`public/claude-desktop/flare_chat.em`](https://github.com/kmcnally5/ember-lang/blob/main/public/claude-desktop/flare_chat.em).
 
 ## A bigger example — a settings dialog
 
@@ -110,7 +110,7 @@ The honest answer to "how does an immediate-mode UI hold a *tree* of mutable sta
 hooks or reducers — the tree is just plain `var`s the loop owns, mutated directly. Here a `modal` (a centred
 panel over a dimmed scrim) of `segmented` controls drives appearance, model, and token settings; a `dirty`
 flag is the app's own "unsaved" signal. Full runnable file:
-[`examples/graphics/20_settings.em`](../examples/graphics/20_settings.em); the core:
+[`examples/graphics/20_settings.em`](https://github.com/kmcnally5/ember-lang/blob/main/examples/graphics/20_settings.em); the core:
 
 ```rust
 var dark = false        // the whole "state tree" is just plain vars the loop owns
@@ -187,7 +187,10 @@ Widgets: `button(txt) -> bool` (secondary), `primary(txt) -> bool` (the headline
 `danger(txt) -> bool` (a **destructive** action — the theme's red fill, for Delete/Remove/Discard; same shape
 as `primary`, so the colour is the only signal — reach for it only when the action is hard to undo),
 `ghost_button(txt) -> bool` (a subtle, borderless
-action — no fill at rest, a soft hover fill, muted ink; for toolbars + message Copy/Retry), `nav_item(txt, active) -> bool` (a
+action — no fill at rest, a soft hover fill, muted ink; for toolbars + message Copy/Retry). These atomic
+buttons size to their **content** — a bare button does NOT span the column it sits in. For a deliberate
+block CTA use the full-width variants `primary_fill(txt) -> bool` / `button_fill(txt) -> bool` (they fill
+a `stretch` parent's width — e.g. a sidebar "New chat" or a stack of suggestions). `nav_item(txt, active) -> bool` (a
 full-width **sidebar nav row** — GROWS to fill the panel width so it tracks a resizable sidebar, LEFT-aligned text that
 **ellipsizes to its pixel width** (`text-overflow: ellipsis`), **FLAT at rest** (no card — just text, like a VS Code /
 Linear sidebar) with a fill only on hover and the accent fill when `active`;
@@ -283,7 +286,20 @@ golden-testable, never coupled to the wall clock.
   for id in order { f.animate_layout("row:" + id); f.row(…); …; f.end(); f.end_animate_layout() }
   ```
 
-Runnable showcase: [`examples/graphics/18_flare_anim.em`](../examples/graphics/18_flare_anim.em) (a spring-driven
+- **`presence(key, present) -> float`** springs **0→1** the first frame a key is seen (animate-*in*) and
+  **1→0** once `present` goes false (animate-*out*); render the leaving element until it returns ~0, then
+  drop it from your data. It's on the keyed-state surface, so it survives list reorders, and pairs with
+  `at` for a fade-and-slide enter/exit:
+  ```ember
+  let p = f.presence("row:" + id, !leaving)
+  f.at(0.0, (1.0 - p) * 16.0); …; f.end_at()
+  if leaving && p < 0.02 { remove(id) }
+  ```
+- **`fade_begin(amount)` … `fade_end()`** composites everything painted between them at `amount` (0–1) —
+  a subtree that dims, disables, or sits behind a scrim as one. A no-op at full opacity, so un-faded
+  goldens stay byte-identical.
+
+Runnable showcase: [`examples/graphics/18_flare_anim.em`](https://github.com/kmcnally5/ember-lang/blob/main/examples/graphics/18_flare_anim.em) (a spring-driven
 width + a FLIP add/remove list). Goldens: `tests/graphics/flare_spring.em`, `tests/graphics/flare_flip.em`.
 
 ## Notes & limits
@@ -306,6 +322,15 @@ width + a FLIP add/remove list). Goldens: `tests/graphics/flare_spring.em`, `tes
   Typing, Backspace, or Delete over a selection replaces it. All of this is plain `std/ui` Ember over
   the existing code-point string ops (`str.cp_*`) and `key_down`/`char_pressed` — no new runtime hooks.
   Editing is code-point–correct: multi-byte UTF-8 (e.g. `é`) is one caret step, not one byte.
+- **Toasts**: `toast(text)` enqueues a transient pill; `toast_layer()` (once per frame, after `finish()`)
+  draws and ages the fading stack on a timer. `toast_action(text, label, token)` adds a button and
+  `take_action()` returns the token for one frame when pressed — the reversible-Undo pattern.
+- **List virtualization**: `virtual_begin(key, count)` / `virtual_item(i)` / `virtual_item_end()` /
+  `virtual_end()` build and lay out only the rows in the scroll viewport (plus overscan), strut spacers
+  keeping the scrollbar exact — O(visible), so an unbounded transcript holds 60fps.
+- **Idle CPU**: the loop blocks on the OS event queue when there's no input, nothing animating
+  (`is_animating()`), and no stream in flight — a still app drops from ~99% of a core to ~0%, waking
+  instantly on the next event.
 
 
 ## Docking — retained layouts with `DockTree`

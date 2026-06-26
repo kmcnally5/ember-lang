@@ -1,0 +1,8 @@
+created+seeded
+last_id=3 changes=1
+cols=4
+1 apple qty=3 price=0.5 type2=1
+2 pear qty=7 price=0.25 type2=1
+3 mystery qty=NULL price=2.25 type2=5
+ok
+=> 0

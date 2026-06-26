@@ -1894,7 +1894,7 @@ struct Flare {
     // ---- widgets ----
     // _btn is the shared body of button/primary: measure, hit-test against LAST frame's rect (so the
     // click is known now), queue a paint node, and return whether it was clicked.
-    fn _btn(mut self, txt: string, kind: int) -> bool {
+    fn _btn(mut self, txt: string, kind: int, fill: bool) -> bool {
         let id = self.scope + txt
         let wid = self.ui.wid(txt)
         var padmul = 3
@@ -1910,35 +1910,55 @@ struct Flare {
                 case None {}
             }
         }
-        let node = self.lo.leaf(w, h, 0)
+        // An atomic action widget sizes to its CONTENT by default (leaf_fixed), so a bare button in the
+        // default stretch column no longer spans the whole window (OFI-115). `fill` opts back into the
+        // full-width behaviour for a deliberate block CTA (e.g. a sidebar "New chat").
+        var node = 0
+        if fill {
+            node = self.lo.leaf(w, h, 0)
+        } else {
+            node = self.lo.leaf_fixed(w, h, 0)
+        }
         self._queue(node, kind, txt, id)
         return clicked
     }
 
 
-    // button is a secondary (panel) action.
+    // button is a secondary (panel) action — content-sized.
     fn button(mut self, txt: string) -> bool {
-        return self._btn(txt, _BUTTON)
+        return self._btn(txt, _BUTTON, false)
     }
 
 
-    // primary is the headline action — filled with the clay accent.
+    // primary is the headline action — filled with the clay accent; content-sized.
     fn primary(mut self, txt: string) -> bool {
-        return self._btn(txt, _PRIMARY)
+        return self._btn(txt, _PRIMARY, false)
     }
 
 
     // danger is the DESTRUCTIVE action — filled with the theme's red (Delete, Remove, Discard). Same
     // shape as primary; the colour is the only signal, so reach for it only when the action is hard to undo.
     fn danger(mut self, txt: string) -> bool {
-        return self._btn(txt, _DANGER)
+        return self._btn(txt, _DANGER, false)
     }
 
 
     // ghost_button is a subtle, borderless action: no fill at rest, a soft hover/press fill, muted ink —
     // for toolbars, message actions (Copy/Retry), and the "···" more-actions affordance.
     fn ghost_button(mut self, txt: string) -> bool {
-        return self._btn(txt, _GHOST)
+        return self._btn(txt, _GHOST, false)
+    }
+
+
+    // button_fill / primary_fill are the FULL-WIDTH variants — they fill a stretch parent's cross axis
+    // (a block button spanning a column), for a deliberate primary CTA or a stacked list of choices.
+    fn button_fill(mut self, txt: string) -> bool {
+        return self._btn(txt, _BUTTON, true)
+    }
+
+
+    fn primary_fill(mut self, txt: string) -> bool {
+        return self._btn(txt, _PRIMARY, true)
     }
 
 

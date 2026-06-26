@@ -1,0 +1,4 @@
+exec_err: no such table: ghost
+prepare_err: near "SELEKT": syntax error
+done
+=> 0

@@ -94,6 +94,19 @@ NETGFX_BIN       := build/emberc-net-gfx
 # macOS, so no extra link flag is needed.
 NETGFX_FLAGS     := -std=c17 -Wall -Wextra -Iinclude -O2 -DNDEBUG -DEMBER_NET=1 -DEMBER_GRAPHICS=1 -DEMBER_PARALLEL=1 $(PORTABLE_DEFS) -pthread
 
+# Database build (MANIFESTO §5h FFI): -DEMBER_SQLITE=1 registers the std/sqlite wrappers and links
+# the VENDORED SQLite amalgamation (third_party/sqlite). Unlike net/graphics this needs no system
+# package — SQLite is two checked-in files — so `make db` works on any machine, dependency-free. The
+# default build stays SQL-free, so `make` / `make test` never compile sqlite3.c. Run a program with:
+#   build/emberc-db --emit=run <file.em>
+DB_BIN       := build/emberc-db
+DB_FLAGS     := -std=c17 -Wall -Wextra -Iinclude -O2 -DNDEBUG -DEMBER_SQLITE=1 $(PORTABLE_DEFS)
+# sqlite3.c is third-party C: compiled once into its own object with its own flags (NOT held to our
+# -Werror). THREADSAFE=0 (the VM running std/sqlite is single-threaded) and no extension loader, so
+# the link stays free of -lpthread / -ldl on both macOS and Linux. See third_party/sqlite/README.md.
+SQLITE_OBJ   := build/sqlite3.o
+SQLITE_CFLAGS := -std=c17 -O2 -DNDEBUG -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 -Ithird_party/sqlite
+
 # AddressSanitizer builds. The older Apple clang's ASan runtime hung at startup on this macOS, so
 # memory work was historically RSS-verified only; Apple clang 21 fixed that and ASan now runs. These
 # instrument the VM + runtime + codegen so running a .em program flags use-after-free / double-free /
@@ -116,7 +129,7 @@ DEPS    := $(OBJECTS:.o=.d)
 GEN_BIN := build/gen_editor_assets
 GRAMMAR := editors/vscode/syntaxes/ember.tmLanguage.json
 
-.PHONY: all test test-update test-lsp doctor help release asan asan-par asan-trace install install-vscode build-zed install-zed parallel mn tsan-mn asan-mn mn-stress mn-graphics mn-net-graphics graphics net net-graphics test-graphics test-net test-parallel crucible ceilings ledger opcheck verify docs string-diff bench parbench gen-editor-assets check-editor-sync clean
+.PHONY: all test test-update test-lsp doctor help release asan asan-par asan-trace install install-vscode build-zed install-zed parallel mn tsan-mn asan-mn mn-stress mn-graphics mn-net-graphics graphics net net-graphics db test-db test-graphics test-net test-parallel crucible ceilings ledger opcheck verify docs string-diff bench parbench gen-editor-assets check-editor-sync clean
 
 all: $(BIN) $(RT_LIB) $(RT_LIB_PAR)
 
@@ -306,6 +319,7 @@ help:
 	@echo "    make install-zed      build + show the Zed dev-extension install step"
 	@echo "  Graphics & net (opt-in, default build stays dependency-free)"
 	@echo "    make graphics         graphics build (raylib)    make net / net-graphics  (libcurl)"
+	@echo "    make db               database build (vendored SQLite)   make test-db   std/sqlite suite"
 	@echo "  Docs & site"
 	@echo "    make docs             regenerate the /guide site + llms-full.txt from THE_EMBER_BOOK.md"
 	@echo ""
@@ -349,6 +363,20 @@ net: | build
 # the Anthropic API and raylib for the GUI. Run with: build/emberc-net-gfx --emit=run <file.em>
 net-graphics: | build
 	$(CC) $(NETGFX_FLAGS) `curl-config --cflags` `pkg-config --cflags raylib freetype2` $(SOURCES) `curl-config --libs` `pkg-config --libs raylib freetype2` $(LDLIBS_MATH) -o $(NETGFX_BIN)
+
+# The vendored SQLite amalgamation, compiled once into its own object (third-party, not -Werror).
+$(SQLITE_OBJ): third_party/sqlite/sqlite3.c third_party/sqlite/sqlite3.h | build
+	$(CC) $(SQLITE_CFLAGS) -c third_party/sqlite/sqlite3.c -o $(SQLITE_OBJ)
+
+# Database compiler (see DB_FLAGS): registers the std/sqlite FFI wrappers and links the vendored
+# SQLite object. Run a SQL program with: build/emberc-db --emit=run <file.em>
+db: $(SQLITE_OBJ) | build
+	$(CC) $(DB_FLAGS) -Ithird_party/sqlite $(SOURCES) $(SQLITE_OBJ) $(LDLIBS_MATH) -o $(DB_BIN)
+
+# Database regression suite (std/sqlite). Needs the db build, so it is separate from the
+# dependency-free `make test`; each case runs against a scratch DB under the system temp dir.
+test-db: db
+	@tests/run-db.sh
 
 # Graphics/UI regression suite (needs the raylib build + a display, so it's separate
 # from the dependency-free `make test`). Builds the graphics compiler first.

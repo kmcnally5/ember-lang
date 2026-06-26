@@ -45,10 +45,10 @@
 0021    |  CONST    2  (= 100)
 0023    |  CALL     0 2
 0026    |  ADD      0
-0028    |  DROP     0
-0030    |  DROP     1
+0028    |  DROP     1
+0030    |  DROP     0
 0032    |  RETURN  
 0033    |  CONST    3  (= 0)
-0035    |  DROP     0
-0037    |  DROP     1
+0035    |  DROP     1
+0037    |  DROP     0
 0039    |  RETURN  

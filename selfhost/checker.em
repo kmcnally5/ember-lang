@@ -1081,6 +1081,17 @@ struct Checker {
                 if vt == TY_UNIT {
                     self.error("cannot bind a call that returns no value")
                 }
+                // OFI-049/095: discarding a Ptr-returning call via `_` is not an escape hatch — the handle
+                // has no destructor, so it still leaks.
+                if name == "_" && vt == TY_PTR {
+                    match value.value {
+                        case ECall(callee, args) {
+                            self.error("this 'Ptr' handle is opened but immediately discarded — it leaks")
+                        }
+                        case _ {
+                        }
+                    }
+                }
                 if ty.len() > 0 {
                     let bt = self.annotation_type(ty[0])
                     if assignable(vt, bt, is_int_literal(value.value), is_float_literal(value.value)) == false {
@@ -1104,7 +1115,18 @@ struct Checker {
                 }
             }
             case SExpr(expr) {
-                self.check_expr(expr.value)
+                let vt = self.check_expr(expr.value)
+                // OFI-049: a Ptr-returning CALL whose result is discarded (a bare statement) leaks the handle
+                // — nothing can ever close it.
+                match expr.value {
+                    case ECall(callee, args) {
+                        if vt == TY_PTR {
+                            self.error("this 'Ptr' handle is opened but immediately discarded — it leaks")
+                        }
+                    }
+                    case _ {
+                    }
+                }
             }
             case SAssign(target, value) {
                 let vt = self.check_expr(value.value)

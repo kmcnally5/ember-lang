@@ -45,6 +45,22 @@ fn is_numeric(t: int) -> bool {
 }
 
 
+// scalar_class collapses a SemType to a coarse comparable class: 1 = any numeric width, 2 = string,
+// 3 = bool, 0 = everything else (struct/enum/array/Ptr/unit/unmodelled — compared leniently, i.e. skipped).
+fn scalar_class(t: int) -> int {
+    if is_numeric(t) {
+        return 1
+    }
+    if t == TY_STRING {
+        return 2
+    }
+    if t == TY_BOOL {
+        return 3
+    }
+    return 0
+}
+
+
 // prim_type maps a primitive type-name spelling to its SemType, or TY_ERROR if not a primitive.
 fn prim_type(name: string) -> int {
     if name == "int" || name == "i64" { return TY_INT }
@@ -128,6 +144,7 @@ struct Checker {
     fn_pstart: [int]           // ...start index into fn_ptype for this fn's params
     fn_ptype: [int]            // every free-fn param SemType, concatenated (arg-type check)
     fn_pqual: [int]            // ...and each param's qualifier (0 none / 1 mut / 2 move), parallel to fn_ptype
+    fn_extern: [bool]          // ...is this entry an `extern "c"` fn (no bytecode slot — cannot be spawned)?
     newtypes: [string]         // newtype names (a newtype value must stay lenient, NOT resolve to a struct)
     sf_owner: [int]            // struct-field table: owning struct index (parallel to `structs`)
     sf_name: [string]          // ...field name
@@ -152,6 +169,7 @@ struct Checker {
     current_return: int        // the enclosing function's return SemType (for the return-type check)
     self_is_var: bool          // is the enclosing method's receiver `mut self`/`move self` (mutable)?
     loop_depth: int            // enclosing loop/for nesting (break/continue must be inside one)
+    nursery_depth: int         // enclosing `nursery` nesting (a `spawn` must be inside one)
     locals: [Local]
     local_moved: [bool]        // MUTABLE move state, parallel to `locals` (element-struct writeback isn't
                                // self-compilable yet — OFI-061 — so the moved flag lives in a scalar array)
@@ -557,6 +575,7 @@ struct Checker {
                     }
                     self.fns.append(f.name)
                     self.fn_names.append(f.name)
+                    self.fn_extern.append(false)
                     var pc = 0
                     var pp = 0
                     loop {
@@ -645,6 +664,7 @@ struct Checker {
                         // call site gets arity/arg checks AND the move-arg consume — so `fopen` types a Ptr open
                         // and `fclose(move f: Ptr)` consumes it, for free.
                         self.fn_names.append(fns[e].name)
+                        self.fn_extern.append(true)
                         var ec = 0
                         var ep = 0
                         loop {
@@ -719,8 +739,17 @@ struct Checker {
                                 break
                             }
                             if fns[e].params[ep].is_self == false {
-                                self.fn_ptype.append(self.param_type(fns[e].params[ep]))
-                                self.fn_pqual.append(fns[e].params[ep].qual)
+                                let pt = self.param_type(fns[e].params[ep])
+                                let q = fns[e].params[ep].qual
+                                self.fn_ptype.append(pt)
+                                self.fn_pqual.append(q)
+                                // A C call passes args BY VALUE: a qualified struct param would skip the leaf-
+                                // flattening the boundary needs. Two qualifiers ARE meaningful — `mut` on a buffer
+                                // ([T]) the C fn writes in place, and `move` on a `Ptr` handle it takes ownership
+                                // of (fclose consumes it). Everything else is rejected (check.c:7493).
+                                if (q == 2 && pt != TY_PTR) || (q == 1 && pt != TY_ARRAY) {
+                                    self.error("an 'extern' parameter must be plain, 'mut' on a buffer ([T]), or 'move' on a Ptr handle")
+                                }
                             }
                             ep = ep + 1
                         }
@@ -1040,6 +1069,7 @@ struct Checker {
         self.scope_depth = 0
         self.self_is_var = false
         self.loop_depth = 0
+        self.nursery_depth = 0
         var p = 0
         loop {
             if p >= f.params.len() {
@@ -1486,10 +1516,33 @@ struct Checker {
                 }
             }
             case SSpawn(call) {
+                // a `spawn` must run under a structured-concurrency scope.
+                if self.nursery_depth == 0 {
+                    self.error("'spawn' is only valid inside a 'nursery'")
+                }
+                // a foreign (extern "c") function has no bytecode slot, so it cannot be spawned as a task.
+                match call.value {
+                    case ECall(callee, args) {
+                        match callee.value {
+                            case EIdent(name) {
+                                let fi = self.fn_index_of(name)
+                                if fi >= 0 && self.fn_extern[fi] {
+                                    self.error("cannot 'spawn' an 'extern' function (it has no task entry point)")
+                                }
+                            }
+                            case _ {
+                            }
+                        }
+                    }
+                    case _ {
+                    }
+                }
                 self.check_expr(call.value)
             }
             case SNursery(body) {
+                self.nursery_depth = self.nursery_depth + 1
                 self.check_block(body)
+                self.nursery_depth = self.nursery_depth - 1
             }
             case SBlock(body) {
                 self.check_block(body)
@@ -1527,6 +1580,12 @@ struct Checker {
                 return TY_STRING
             }
             case EIdent(name) {
+                if name == "_" {
+                    // `_` is a WRITE-ONLY discard wildcard (OFI-095): it binds nothing readable, so reading
+                    // it in value position is an undefined-identifier error.
+                    self.error("'_' is a write-only discard and cannot be read")
+                    return TY_ERROR
+                }
                 if self.is_known(name) == false {
                     self.error("undefined variable")
                     return TY_ERROR
@@ -1750,12 +1809,25 @@ struct Checker {
                 return TY_INFER
             }
             case EArray(elems, lines) {
+                // All elements must share one type. To stay lenient (0 false-rejects) we compare only the
+                // coarse SCALAR CLASS — numeric / string / bool — collapsing every numeric width into one
+                // (so int↔float coercion is never flagged) and skipping non-scalar/unmodelled elements
+                // (struct/enum/call → class 0). A concrete string-vs-number / bool-vs-number mix is rejected.
+                var ec = 0
                 var i = 0
                 loop {
                     if i >= elems.len() {
                         break
                     }
-                    self.check_expr(elems[i])
+                    let et = self.check_expr(elems[i])
+                    let cls = scalar_class(et)
+                    if cls != 0 {
+                        if ec == 0 {
+                            ec = cls
+                        } else if cls != ec {
+                            self.error("array elements must all have the same type")
+                        }
+                    }
                     i = i + 1
                 }
                 return TY_ARRAY
@@ -2316,6 +2388,7 @@ fn check(src: string) -> bool {
     var fn_pstart: [int] = []
     var fn_ptype: [int] = []
     var fn_pqual: [int] = []
+    var fn_extern: [bool] = []
     var newtypes: [string] = []
     var sf_owner: [int] = []
     var sf_name: [string] = []
@@ -2339,7 +2412,7 @@ fn check(src: string) -> bool {
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, fn_extern: fn_extern, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, nursery_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

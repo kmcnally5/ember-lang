@@ -89,6 +89,17 @@ fn is_builtin(name: string) -> bool {
 }
 
 
+// builtin_ret_type returns the SemType a built-in call yields, for the cases the checker relies on: the
+// pure side-effecting builtins return UNIT (so binding/assigning their result is an error). Everything
+// else stays TY_INFER (lenient) — a value-returning builtin is never wrongly rejected.
+fn builtin_ret_type(name: string) -> int {
+    if name == "print" || name == "println" || name == "exit" || name == "send" || name == "close" || name == "assert" {
+        return TY_UNIT
+    }
+    return TY_INFER
+}
+
+
 struct Local {
     name: string
     depth: int
@@ -124,6 +135,7 @@ struct Checker {
     sm_pstart: [int]           // ...start index into sm_ptype
     sm_ptype: [int]            // every method param SemType, concatenated (method arg-type check)
     sm_mutself: [bool]         // ...does the method take `mut self` / `move self` (a mutable receiver)?
+    sm_ret: [int]              // ...the method's return SemType (TY_UNIT for a void method; TY_INFER if unmodelled)
     ev_enum: [int]             // enum-variant table: owning enum index (parallel to `enums`)
     ev_name: [string]          // ...variant name
     ev_arity: [int]            // ...payload field count
@@ -574,6 +586,11 @@ struct Checker {
                         }
                         self.sm_arity.append(ac)
                         self.sm_mutself.append(mself)
+                        if methods[mi].ret.len() > 0 {
+                            self.sm_ret.append(self.annotation_type(methods[mi].ret[0]))
+                        } else {
+                            self.sm_ret.append(TY_UNIT)          // a method with no `-> T` returns unit
+                        }
                         mi = mi + 1
                     }
                 }
@@ -1251,6 +1268,26 @@ struct Checker {
                     case _ {
                     }
                 }
+                // the call's RESULT TYPE — a known method's declared return, or a void builtin's unit. Most
+                // calls stay TY_INFER (lenient); only a CONCRETE result drives the void-bind / assignment check.
+                match callee.value {
+                    case EIdent(name) {
+                        if self.resolve_local(name) == false && is_builtin(name) {
+                            return builtin_ret_type(name)
+                        }
+                    }
+                    case EGet(object, mname) {
+                        let r = self.check_expr(object.value)
+                        if r >= STRUCT_BASE && r < ENUM_BASE {
+                            let mr = self.method_row(r - STRUCT_BASE, mname)
+                            if mr >= 0 {
+                                return self.sm_ret[mr]
+                            }
+                        }
+                    }
+                    case _ {
+                    }
+                }
                 return TY_INFER
             }
             case EGet(object, name) {
@@ -1735,6 +1772,7 @@ fn check(src: string) -> bool {
     var sm_pstart: [int] = []
     var sm_ptype: [int] = []
     var sm_mutself: [bool] = []
+    var sm_ret: [int] = []
     var ev_enum: [int] = []
     var ev_name: [string] = []
     var ev_arity: [int] = []
@@ -1746,7 +1784,7 @@ fn check(src: string) -> bool {
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

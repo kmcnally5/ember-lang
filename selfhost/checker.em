@@ -128,6 +128,10 @@ struct Checker {
     ev_name: [string]          // ...variant name
     ev_arity: [int]            // ...payload field count
     ifaces: [string]           // interface names — a value of interface type stays lenient (coercion)
+    im_iface: [int]            // interface-method table: owning interface index (parallel to `ifaces`)
+    im_name: [string]          // ...required method name (a conforming struct must declare it)
+    im_arity: [int]            // ...required param count (self excluded)
+    im_ret: [int]              // ...required return SemType (TY_INFER/TY_SELF stay lenient on a conformance compare)
     tparams: [string]          // generic type-parameter names currently in scope (resolve to TY_INFER)
     current_return: int        // the enclosing function's return SemType (for the return-type check)
     self_is_var: bool          // is the enclosing method's receiver `mut self`/`move self` (mutable)?
@@ -373,7 +377,34 @@ struct Checker {
                     if self.is_duplicate_type(name) {
                         self.error("a type with this name is already declared in this module")
                     }
+                    let iid = self.ifaces.len()
                     self.ifaces.append(name)         // an interface is a type NAME but not a struct id
+                    var imi = 0                      // record each required method (name + arity) for conformance
+                    loop {
+                        if imi >= methods.len() {
+                            break
+                        }
+                        self.im_iface.append(iid)
+                        self.im_name.append(methods[imi].name)
+                        var iac = 0
+                        var ipp = 0
+                        loop {
+                            if ipp >= methods[imi].params.len() {
+                                break
+                            }
+                            if methods[imi].params[ipp].is_self == false {
+                                iac = iac + 1
+                            }
+                            ipp = ipp + 1
+                        }
+                        self.im_arity.append(iac)
+                        if methods[imi].ret.len() > 0 {
+                            self.im_ret.append(self.annotation_type(methods[imi].ret[0]))
+                        } else {
+                            self.im_ret.append(TY_UNIT)
+                        }
+                        imi = imi + 1
+                    }
                 }
                 case DImport(path, alias) {
                     self.aliases.append(alias)
@@ -441,8 +472,51 @@ struct Checker {
                         if ii >= impls.len() {
                             break
                         }
-                        if index_of(self.ifaces, impls[ii]) < 0 && impls[ii] != "Hash" && impls[ii] != "Eq" {
+                        let iid = index_of(self.ifaces, impls[ii])
+                        if iid < 0 && impls[ii] != "Hash" && impls[ii] != "Eq" {
                             self.error("unknown interface in 'implements'")
+                        }
+                        // CONFORMANCE: the struct must declare every method the interface requires, with a
+                        // matching arity and (when both are concrete) return type — the nominal conformance
+                        // check (src/check.c:check_conformance). Built-in Hash/Eq carry no required methods.
+                        if iid >= 0 {
+                            var mj = 0
+                            loop {
+                                if mj >= self.im_name.len() {
+                                    break
+                                }
+                                if self.im_iface[mj] == iid {
+                                    let di = method_decl_index(methods, self.im_name[mj])
+                                    if di < 0 {
+                                        self.error("struct is missing a method required by an interface it implements")
+                                    } else {
+                                        var sa = 0
+                                        var sp = 0
+                                        loop {
+                                            if sp >= methods[di].params.len() {
+                                                break
+                                            }
+                                            if methods[di].params[sp].is_self == false {
+                                                sa = sa + 1
+                                            }
+                                            sp = sp + 1
+                                        }
+                                        var sret = TY_UNIT
+                                        if methods[di].ret.len() > 0 {
+                                            sret = self.annotation_type(methods[di].ret[0])
+                                        }
+                                        let iret = self.im_ret[mj]
+                                        var bad = sa != self.im_arity[mj]
+                                        if iret != TY_INFER && iret != TY_ERROR && iret != TY_SELF && sret != TY_INFER && sret != TY_ERROR && sret != iret {
+                                            bad = true
+                                        }
+                                        if bad {
+                                            self.error("a method's signature does not match the interface it implements")
+                                        }
+                                    }
+                                }
+                                mj = mj + 1
+                            }
                         }
                         ii = ii + 1
                     }
@@ -1315,6 +1389,22 @@ struct Checker {
 
 // is_int_literal / is_float_literal report whether an expression is a bare numeric literal — the operands
 // stage-0 lets adapt to the other side's width in arithmetic.
+// method_decl_index returns the index of the method named `name` in a struct's method list, or -1.
+fn method_decl_index(methods: [ps.FnDecl], name: string) -> int {
+    var i = 0
+    loop {
+        if i >= methods.len() {
+            break
+        }
+        if methods[i].name == name {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+
 // is_const_literal reports whether an expression is a compile-time constant a top-level `let` may hold: an
 // int/float/bool/string literal, or a unary-minus of an int/float literal (a negative constant). Mirrors
 // src/check.c:is_const_literal.
@@ -1649,10 +1739,14 @@ fn check(src: string) -> bool {
     var ev_name: [string] = []
     var ev_arity: [int] = []
     var ifaces: [string] = []
+    var im_iface: [int] = []
+    var im_name: [string] = []
+    var im_arity: [int] = []
+    var im_ret: [int] = []
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

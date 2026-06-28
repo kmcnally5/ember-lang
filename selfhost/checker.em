@@ -196,6 +196,8 @@ struct Checker {
                                // else (no obligation). OFI-049.
     loop_break_consumed: [bool]  // AND-merge of the consumed-state at each `break` in the current loop — the
     loop_saw_break: bool         // post-loop consumed-state is the merge of all break-exit paths (close-on-break).
+    local_unbounded_tp: [bool]   // ...is this local a param of an UNBOUNDED generic type-param `T` (no interface
+                                 // bound)? A method call on one is an error (check.c:4073); parallel to `locals`.
     scope_depth: int
     diags: [string]            // collected diagnostic messages (positions added in M3c)
 
@@ -230,6 +232,7 @@ struct Checker {
         self.local_moved.append(false)
         // an OWNED Ptr local is an OPEN obligation (consumed=false); everything else has none (true).
         self.local_consumed.append((owned && ty == TY_PTR) == false)
+        self.local_unbounded_tp.append(false)   // set true by check_fn only for an unbounded-type-param param
     }
 
 
@@ -1249,6 +1252,8 @@ struct Checker {
         var freshbrk: [bool] = []
         self.loop_break_consumed = freshbrk
         self.loop_saw_break = false
+        var freshu: [bool] = []
+        self.local_unbounded_tp = freshu
         self.scope_depth = 0
         self.self_is_var = false
         self.loop_depth = 0
@@ -1263,6 +1268,11 @@ struct Checker {
             } else {
                 // a `mut`/`move` parameter is a mutable binding; a plain (borrow) parameter is not.
                 self.declare(f.params[p].name, self.param_type(f.params[p]), f.params[p].qual != 0, f.params[p].qual == 2, f.params[p].qual == 2)
+                // A parameter typed as an UNBOUNDED generic type-param provides no methods — mark it so a
+                // method call on it is rejected (a bounded `T: Ord` keeps its interface methods, so isn't marked).
+                if is_unbounded_tparam(f.generics, f.params[p]) {
+                    self.local_unbounded_tp[self.locals.len() - 1] = true
+                }
             }
             p = p + 1
         }
@@ -1319,6 +1329,7 @@ struct Checker {
         var kept: [Local] = []
         var keptm: [bool] = []
         var keptc: [bool] = []
+        var keptu: [bool] = []
         var i = 0
         loop {
             if i >= n {
@@ -1327,11 +1338,13 @@ struct Checker {
             kept.append(Local{ name: self.locals[i].name, depth: self.locals[i].depth, ty: self.locals[i].ty, is_var: self.locals[i].is_var, owned: self.locals[i].owned, mvparam: self.locals[i].mvparam })
             keptm.append(self.local_moved[i])           // a move on an OUTER local persists past an inner scope
             keptc.append(self.local_consumed[i])
+            keptu.append(self.local_unbounded_tp[i])
             i = i + 1
         }
         self.locals = kept
         self.local_moved = keptm
         self.local_consumed = keptc
+        self.local_unbounded_tp = keptu
     }
 
 
@@ -1945,6 +1958,18 @@ struct Checker {
                         // D2: a method call `recv.m(args)` — only when the receiver is a known plain struct;
                         // a builtin/array/string/INFER receiver (mr < 0 or non-struct) stays lenient.
                         let recv = self.check_expr(object.value)
+                        // A method call on an UNBOUNDED generic type-param binding has no method to dispatch
+                        // to — even `.clone()` (check.c:4073). A bounded `T: Ord` keeps its interface methods.
+                        match object.value {
+                            case EIdent(rname) {
+                                let rslot = self.local_slot(rname)
+                                if rslot >= 0 && self.local_unbounded_tp[rslot] {
+                                    self.error("cannot call a method on an unbounded type parameter")
+                                }
+                            }
+                            case _ {
+                            }
+                        }
                         if recv >= STRUCT_BASE && recv < ENUM_BASE {
                             let mr = self.method_row(recv - STRUCT_BASE, mname)
                             if mr < 0 && mname != "clone" {
@@ -2532,6 +2557,37 @@ fn gp_names(gs: [ps.GenericParam]) -> [string] {
 }
 
 
+// is_unbounded_tparam reports whether a value parameter's type is a bare generic type-param with NO interface
+// bound (a `T`, or even `T: Copy` — Copy is not an interface, so it provides no methods). A method call on
+// such a binding is an error (check.c:4073). A bounded `T: Ord`/`T: Hash` keeps its interface methods.
+fn is_unbounded_tparam(generics: [ps.GenericParam], p: ps.Param) -> bool {
+    if p.ty.len() != 1 {
+        return false
+    }
+    match p.ty[0] {
+        case TyName(qual, name) {
+            if qual != "" {
+                return false
+            }
+            var i = 0
+            loop {
+                if i >= generics.len() {
+                    break
+                }
+                if generics[i].name == name {
+                    return generics[i].bounds.len() == 0
+                }
+                i = i + 1
+            }
+            return false
+        }
+        case _ {
+            return false
+        }
+    }
+}
+
+
 // tparam_index_of returns the generic-parameter index a value parameter's type refers to when that type is
 // a BARE type-param `T` (so a call can bind T to the argument's type and check T's bounds), or -1 otherwise.
 // Only a bare unqualified `TyName` matching a declared generic name qualifies — `[T]`, `Box<T>`, a concrete
@@ -2746,7 +2802,7 @@ fn check(src: string) -> bool {
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, fn_ptparam: fn_ptparam, fn_extern: fn_extern, fg_name: fg_name, fg_param: fg_param, fg_bound: fg_bound, struct_garity: struct_garity, sg_struct: sg_struct, sg_param: sg_param, sg_bound: sg_bound, simpl_struct: simpl_struct, simpl_iface: simpl_iface, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, nursery_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, fn_ptparam: fn_ptparam, fn_extern: fn_extern, fg_name: fg_name, fg_param: fg_param, fg_bound: fg_bound, struct_garity: struct_garity, sg_struct: sg_struct, sg_param: sg_param, sg_bound: sg_bound, simpl_struct: simpl_struct, simpl_iface: simpl_iface, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, nursery_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, local_unbounded_tp: [], scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

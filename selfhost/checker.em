@@ -1093,7 +1093,7 @@ struct Checker {
                 self.check_expr(index.value)
                 return TY_INFER
             }
-            case EArray(elems) {
+            case EArray(elems, lines) {
                 var i = 0
                 loop {
                     if i >= elems.len() {

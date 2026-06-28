@@ -51,7 +51,7 @@ enum Expr {
     ECall(callee: Box<Expr>, args: [Expr])
     EGet(object: Box<Expr>, name: string)
     EIndex(object: Box<Expr>, index: Box<Expr>)
-    EArray(elems: [Expr])
+    EArray(elems: [Expr], lines: [int])             // lines[i] = element i's start line (codegen line attribution)
     EStructLit(ty: Box<Ty>, fields: [SLitField])
     ETry(operand: Box<Expr>)
     ERange(lo: Box<Expr>, hi: Box<Expr>)
@@ -284,7 +284,7 @@ fn p_expr(e: Expr, depth: int) {
             p_expr(object.value, depth + 1)
             p_expr(index.value, depth + 1)
         }
-        case EArray(elems) {
+        case EArray(elems, lines) {
             println("{pad}Array ({elems.len()})")
             var i = 0
             loop {
@@ -770,6 +770,17 @@ fn binop_id(k: lx.Tk) -> int {
         case TCaret { return 16 }
         case TShl { return 17 }
         case TShr { return 18 }
+        case _ { return 0 }
+    }
+}
+
+
+// unop_id maps a prefix unary operator to a small id (1 minus, 2 bang/not, 3 tilde/bitnot), else 0.
+fn unop_id(k: lx.Tk) -> int {
+    match k {
+        case TMinus { return 1 }
+        case TBang { return 2 }
+        case TTilde { return 3 }
         case _ { return 0 }
     }
 }
@@ -1784,11 +1795,13 @@ struct Parser {
                 let saved = self.no_struct
                 self.no_struct = false
                 var elems: [Expr] = []
+                var elines: [int] = []
                 loop {
                     self.skip_newlines()
                     if self.at(TAG_RBRACKET) || self.is_eof() {
                         break
                     }
+                    elines.append(self.peek().line)         // each element's start line (codegen attributes its bytes)
                     elems.append(self.parse_expr())
                     self.skip_newlines()
                     if self.at(TAG_COMMA) {
@@ -1800,7 +1813,7 @@ struct Parser {
                 self.skip_newlines()
                 self.no_struct = saved
                 let _ = self.expect(TAG_RBRACKET)
-                return EArray(elems)
+                return EArray(elems, elines)
             }
             case _ {
                 let _ = self.advance()

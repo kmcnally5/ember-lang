@@ -460,17 +460,28 @@ The four proposed during planning, plus three surfaced by the Stage A dogfood:
 
 ## 10. Progress and next steps
 
-**M0–M2 are landed; M3 and M4 are in progress.** Stage 0 is frozen (`stage0-v0.3.42`), Stage A spikes are
-green, and the **lexer + parser are byte-identical to stage-0 over the whole corpus on both backends**.
-The **checker** reaches stage-0's verdict on 478/539 files with zero false-rejects, and the **bytecode
-backend** is byte-identical across 34 gated fixtures spanning scalars, control flow, strings, every struct
-representation, generic-struct monomorphization, match-binding payload classification, array element kinds,
-wrapping arithmetic, interpolation render kinds, methods, arrays, the move/drop discipline, call-returns,
-multi-module diamonds, and non-identifier receivers. **Two whole compiler modules now SELF-COMPILE
-byte-identical end-to-end on both backends: `selfhost/lexer.em` AND `selfhost/parser.em`** (the latter a
-~1700-line recursive-descent parser — 84/84 functions byte-identical) — both gated in `make selfhost` at
-**1135/0**, folded into `make verify`. Over the differential corpus (`tools/cgdiff.sh -c`) the self-hosted
-backend is byte-identical on **121/452** compiled files.
+**🎉 THE VM FIXED POINT IS REACHED. M0–M4 self-compile.** Stage 0 is frozen (`stage0-v0.3.42`). The
+**self-hosted compiler reproduces its OWN COMPLETE SOURCE byte-identically** to the C reference, on both the
+bytecode VM and the native backend: **all four modules — `selfhost/lexer.em`, `selfhost/parser.em`,
+`selfhost/checker.em`, and `selfhost/codegen.em` — self-compile byte-identical end-to-end** (`emberc
+--emit=bytecode MODULE` == the self-hosted lexer→parser→codegen run on MODULE, on every function of every
+module). The whole self-hosted toolchain is gated in `make selfhost` at **1137/0**, folded into `make
+verify`. The lexer + parser are also byte-identical over the WHOLE corpus on both backends, the checker
+reaches stage-0's verdict on 479/540 files with zero false-rejects, and the bytecode backend is byte-identical
+across 36 gated fixtures (scalars, control flow, strings, every struct representation, generic-struct
+monomorphization, match-binding payload classification, array element kinds, wrapping & float/sized
+arithmetic, interpolation render kinds, unary ops, methods, the move/drop discipline, multi-module diamonds).
+Over the differential corpus (`tools/cgdiff.sh -c`) the self-hosted backend is byte-identical on a growing
+fraction of arbitrary programs; the compiler's own ~6000 lines are 100%.
+
+What "fixed point" means here: the differential is `emberc --emit=bytecode MODULE` (stage 0) vs `emberc
+--emit=run selfhost/codegen_dump.em MODULE` (the self-hosted front end + codegen run on the VM). Compiling
+`codegen.em` this way IS the self-hosted codegen compiling its own source; doing it for all four modules is
+the self-hosted compiler reproducing itself. The remaining work toward a STANDALONE bootstrap is packaging
+(a self-hosted driver that links the front end + codegen into a binary emitting object code / a runnable
+chunk, rather than the differential `--emit` path) and the long-pole checker completeness (the 61
+not-yet-rejected files — invalid programs the lenient self-hosted checker still accepts; it never
+false-rejects, so it compiles every VALID program, including itself, correctly).
 
 Ranked next moves:
 0. **M4 — generic struct monomorphization** — **LANDED.** Stage-0 monomorphizes generic structs: each

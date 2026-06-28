@@ -31,6 +31,9 @@ let OP_SUB: int = 9
 let OP_WRAP_ADD: int = 21
 let OP_WRAP_SUB: int = 22
 let OP_WRAP_MUL: int = 23
+let OP_NEG: int = 13
+let OP_NOT: int = 14
+let OP_BITNOT: int = 18
 let OP_JUMP: int = 30
 let OP_JUMP_IF_FALSE: int = 31
 let OP_LOOP: int = 32
@@ -741,7 +744,7 @@ struct InstColl {
                 self.walk_expr(object.value)
                 self.walk_expr(index.value)
             }
-            case EArray(elems) {
+            case EArray(elems, lines) {
                 var i = 0
                 loop {
                     if i >= elems.len() {
@@ -887,7 +890,7 @@ fn string_method_op(mname: string) -> int {
 
 fn is_array_lit(e: ps.Expr) -> bool {
     match e {
-        case EArray(elems) {
+        case EArray(elems, lines) {
             return true
         }
         case _ {
@@ -941,7 +944,7 @@ fn is_call_expr(e: ps.Expr) -> bool {
 // to infer the ArrayElemKind from, so the kind must come from the declared `[T]` type instead).
 fn array_lit_is_empty(e: ps.Expr) -> bool {
     match e {
-        case EArray(elems) {
+        case EArray(elems, lines) {
             return elems.len() == 0
         }
         case _ {
@@ -1007,6 +1010,32 @@ fn ty_scalar_kind(ty: ps.Ty) -> int {
             return 0
         }
     }
+}
+
+
+// aek_to_render_kind maps an ArrayElemKind byte (value.h AEK_*) to the int_kind/render kind: an i64 array
+// element renders as int (0), sized ints keep their kind, f32->8, f64->9, bool->10. Lets an interpolation
+// hole `{arr[i]}` of a scalar array render with the element's width.
+fn aek_to_render_kind(aek: int) -> int {
+    if aek == 9 {
+        return 8                             // AEK_F32 -> render f32
+    }
+    if aek == 10 {
+        return 9                             // AEK_F64 -> render f64
+    }
+    if aek == 11 {
+        return 10                            // AEK_BOOL -> render bool
+    }
+    if aek == 4 {
+        return 0                             // AEK_I64 -> render int
+    }
+    if aek >= 1 && aek <= 3 {
+        return aek                           // AEK_I8/I16/I32 -> render 1/2/3
+    }
+    if aek >= 5 && aek <= 8 {
+        return aek - 1                       // AEK_U8..U64 -> render 4..7
+    }
+    return 0
 }
 
 
@@ -1201,6 +1230,7 @@ struct Chunk {
     fn_names: [string]          // codegen scratch: top-level fn names in definition order (CALL index)
     fn_ret_str: [bool]          // ...parallel: does fn #i return a string?
     fn_ret_arr: [bool]          // ...parallel: does fn #i return an array?
+    fn_ret_elem: [int]          // ...parallel: for an array-returning fn #i, its element type code, else -1
     fn_ret_sid: [int]           // ...parallel: struct id fn #i returns (else -1)
     fn_ret_enum: [bool]         // ...parallel: does fn #i return an enum?
     cont_targets: [int]         // loop-context stack: each enclosing loop's continue target (its start)
@@ -1530,6 +1560,7 @@ struct Chunk {
     fn gen_consume(mut self, e: ps.Expr, line: int) {
         let inc = self.is_str_local_read(e)
         let mvslot = self.move_local_slot(e)
+        let barr = self.is_borrowed_array_read(e)
         self.gen_expr(e, line)
         if inc {
             self.emit(OP_INCREF)
@@ -1540,6 +1571,24 @@ struct Chunk {
             self.emit(OP_SET_LOCAL)
             self.emit_idx(mvslot)
             self.emit(OP_POP)
+        } else if barr {
+            self.emit(OP_INCREF)                     // a BORROWED array (a borrow param) aliased into an OWNER
+        }
+    }
+
+
+    // is_borrowed_array_read reports whether `e` reads a BORROWED array local (an array param — slot_array set,
+    // not droppable). Consuming one into a new OWNER (a struct field, a return) keeps the borrow's reference,
+    // so it INCREFs (an OWNED array `let` is MOVED instead — handled by move_local_slot).
+    fn is_borrowed_array_read(self, e: ps.Expr) -> bool {
+        match e {
+            case EIdent(name) {
+                let slot = self.resolve_slot(name)
+                return slot >= 0 && self.slot_array[slot] && self.local_drop[slot] == false
+            }
+            case _ {
+                return false
+            }
         }
     }
 
@@ -1646,6 +1695,38 @@ struct Chunk {
             }
         }
         return -1
+    }
+
+
+    // expr_ret_elem returns the ELEMENT type code of an array-returning call (`let xs = f()` then `xs[i]`):
+    // a user fn from `fn_ret_elem`, `args()` -> [string] (-3), `s.bytes()` -> a scalar byte array (-1). -1
+    // when not an array-returning call (or the element kind is unknown).
+    fn expr_ret_elem(self, e: ps.Expr) -> int {
+        match e {
+            case ECall(callee, args) {
+                match callee.value {
+                    case EIdent(name) {
+                        if name == "args" {
+                            return 0 - 3                  // args() -> [string]
+                        }
+                    }
+                    case EGet(object, mname) {
+                        if mname == "bytes" {
+                            return 0 - 1                  // s.bytes() -> a scalar (u8) byte array
+                        }
+                    }
+                    case _ {
+                    }
+                }
+                let idx = self.resolve_call_fn_index(callee.value)
+                if idx >= 0 {
+                    return self.fn_ret_elem[idx]
+                }
+            }
+            case _ {
+            }
+        }
+        return 0 - 1
     }
 
 
@@ -1777,6 +1858,7 @@ struct Chunk {
                     } else if array_lit_is_empty(fv) {
                         // an empty `[]` field value carries no element kind — take it from the FIELD's declared
                         // `[T]` (a boxed `[Stmt]`/`[Expr]` element is AEK 0, not the context-free int default).
+                        self.cur_line = line
                         let esid = self.field_elem_code(sid, fname)
                         if esid >= 0 && self.struct_array_inline(esid) {
                             self.emit(OP_NEW_STRUCT_ARRAY)
@@ -2010,7 +2092,7 @@ struct Chunk {
             case EStr(parts) {
                 return true
             }
-            case EArray(elems) {
+            case EArray(elems, lines) {
                 return true
             }
             case EStructLit(ty, fields) {
@@ -2099,6 +2181,101 @@ struct Chunk {
         self.emit(OP_CALL_NATIVE)
         self.emit_idx(nid)
         self.emit_idx(args.len())
+        var dk = 0
+        loop {
+            if dk >= keep {
+                break
+            }
+            self.emit(OP_DROP_UNDER)
+            dk = dk + 1
+        }
+    }
+
+
+    // user_arg_masked reports whether a user-function call argument is an OWNING-TEMP ARRAY (an array literal,
+    // or a call returning an array) passed to a BORROW param — the caller retains the temp and must drop it
+    // after the call. Strings/enums go to OWNED params (adopted, no drop); structs aren't masked here (the
+    // corpus has no struct-temp user-call arg — they'd extend this when one appears).
+    fn user_arg_masked(self, e: ps.Expr) -> bool {
+        match e {
+            case EArray(elems, lines) {
+                return true
+            }
+            case ECall(callee, args) {
+                if self.is_enum_ctor(e) {
+                    return false
+                }
+                return self.expr_ret_kind(e) == 0 - 2   // a call returning an array
+            }
+            case _ {
+                return false
+            }
+        }
+    }
+
+
+    // gen_user_call emits a free-function CALL, applying the owning-temp keep+drop discipline (PICK + DROP_UNDER,
+    // like gen_builtin_call) to array-object args: each kept temp is pushed BELOW the args, PICK'd as a borrow
+    // alias for the call, then DROP_UNDER'd from under the single result. Non-masked args go through gen_one_arg
+    // (so a string/enum place-read still INCREFs and a multi-slot struct still spreads).
+    fn gen_user_call(mut self, fn_idx: int, args: [ps.Expr], line: int) {
+        var masked: [bool] = []
+        var keep = 0
+        var i = 0
+        loop {
+            if i >= args.len() {
+                break
+            }
+            let m = self.user_arg_masked(args[i])
+            masked.append(m)
+            if m {
+                keep = keep + 1
+            }
+            i = i + 1
+        }
+        if keep == 0 {
+            let n = self.gen_call_args(args, line)
+            self.cur_line = line
+            self.emit(OP_CALL)
+            self.emit_idx(fn_idx)
+            self.emit_idx(n)
+            return
+        }
+        var k = 0                                    // push every kept temp first (they sit below the args)
+        loop {
+            if k >= args.len() {
+                break
+            }
+            if masked[k] {
+                self.gen_expr(args[k], line)
+            }
+            k = k + 1
+        }
+        var argc = 0
+        var built = 0
+        var t_seen = 0
+        var b = 0
+        loop {
+            if b >= args.len() {
+                break
+            }
+            if masked[b] {
+                self.emit(OP_PICK)                   // a borrow alias of the kept temp
+                self.emit_idx(keep + built - 1 - t_seen)
+                t_seen = t_seen + 1
+                built = built + 1
+                argc = argc + 1
+            } else {
+                let span = self.gen_one_arg(args[b], line)
+                built = built + span
+                argc = argc + span
+            }
+            b = b + 1
+        }
+        self.cur_line = line
+        self.emit(OP_CALL)
+        self.emit_idx(fn_idx)
+        self.emit_idx(argc)
         var dk = 0
         loop {
             if dk >= keep {
@@ -2477,6 +2654,21 @@ struct Chunk {
                 let slot = self.resolve_slot(name)
                 if slot >= 0 {
                     return self.slot_kind[slot]
+                }
+                return 0
+            }
+            case EIndex(object, index) {
+                // an element hole `{obj.farr[i]}` of a scalar FIELD array (e.g. `chunk.const_float[i]`):
+                // render with the field's element kind (the array's AEK byte mapped to the render kind).
+                match object.value {
+                    case EGet(inner, fname) {
+                        let osid = self.expr_type_kind(inner.value)
+                        if osid >= 0 {
+                            return aek_to_render_kind(self.field_arr_kind(osid, fname))
+                        }
+                    }
+                    case _ {
+                    }
                 }
                 return 0
             }
@@ -2878,6 +3070,21 @@ struct Chunk {
                     i = i + 1
                 }
             }
+            case EUnary(op, operand) {
+                // a prefix unary op: gen the operand, then NEG (minus) / NOT (!) / BITNOT (~). NEG and BITNOT
+                // carry the operand's width kind (num_kind); NOT does not.
+                self.gen_expr(operand.value, operand.line)
+                let uid = ps.unop_id(op)
+                if uid == 1 {
+                    self.emit(OP_NEG)
+                    self.emit(self.scalar_kind_of(operand.value))
+                } else if uid == 2 {
+                    self.emit(OP_NOT)
+                } else if uid == 3 {
+                    self.emit(OP_BITNOT)
+                    self.emit(self.scalar_kind_of(operand.value))
+                }
+            }
             case EBinary(op, l, r) {
                 let bid = ps.binop_id(op)
                 if bid == 1 && (self.expr_is_string(l.value) || self.expr_is_string(r.value)) {
@@ -2966,11 +3173,9 @@ struct Chunk {
                             self.emit_idx(self.ev_tag[vi])
                             self.emit_idx(self.ev_arity[vi])
                         } else {
-                            let n = self.gen_call_args(args, line)   // total slots (multi-slot struct spreads)
-                            self.cur_line = line
-                            self.emit(OP_CALL)           // free-function call: index by name, no self
-                            self.emit_idx(cg_index_of(self.fn_names, name))
-                            self.emit_idx(n)
+                            // a free-function call: index by name, no self. An owning-temp ARRAY arg is kept +
+                            // dropped around the call (PICK/DROP_UNDER); the simple no-mask case is unchanged.
+                            self.gen_user_call(cg_index_of(self.fn_names, name), args, line)
                         }
                     }
                     case _ {
@@ -2991,13 +3196,13 @@ struct Chunk {
             case EGet(object, name) {
                 self.gen_field_access(object.value, name)
             }
-            case EArray(elems) {
+            case EArray(elems, lines) {
                 var ai = 0
                 loop {
                     if ai >= elems.len() {
                         break
                     }
-                    self.gen_consume(elems[ai], line)   // each element consumed (a string element INCREFs)
+                    self.gen_consume(elems[ai], lines[ai])   // each element at its own source line (a string INCREFs)
                     ai = ai + 1
                 }
                 self.emit(OP_NEW_ARRAY)
@@ -3082,6 +3287,7 @@ struct Chunk {
                     if rk == -2 {
                         self.gen_expr(value.value, value.line)       // CALL -> one owned array slot
                         self.declare_binding(name, 1, -1, false, true, false, true)
+                        self.slot_elem[self.slot_elem.len() - 1] = self.expr_ret_elem(value.value)   // so `xs[i]` knows its element kind
                     } else if rk >= 0 && is_var == false && self.struct_all_scalar(rk) {
                         self.gen_expr(value.value, value.line)       // CALL -> RETURN_STRUCT span slots
                         self.declare_binding(name, self.struct_field_count(rk), rk, false, false, false, false)
@@ -3199,7 +3405,7 @@ struct Chunk {
                 // read from. A subject that is a fresh OWNING temp (a call / construction) is dropped on the
                 // fall-through and via early exits (OFI-118); a borrowed local/param subject is only POP'd.
                 self.gen_expr(value.value, value.line)
-                let subj_drop = is_owning_temp(value.value)
+                let subj_drop = self.is_owning_temp_obj(value.value)   // `arr[i]` of a boxed array is a borrow (POP), not owning
                 let subject = self.locals.len()
                 self.declare_binding("", 1, -1, false, subj_drop, false, false)
                 var end_jumps: [int] = []
@@ -3613,38 +3819,39 @@ struct RetInfo {
     arr: bool                  // an array (move, owned-droppable)
     sid: int                   // a struct id (boxed, owned-droppable), else -1
     enm: bool                  // an enum (heap/move, owned-droppable)
+    elem: int                  // for an ARRAY return: its element type code (struct sid / -3 / -4 / -1), else -1
 }
 
 
 // ret_info classifies a `[Ty]` return/annotation type.
 fn ret_info(ret: [ps.Ty], structs: StructTable, enum_names: [string]) -> RetInfo {
     if ret.len() == 0 {
-        return RetInfo { str: false, arr: false, sid: -1, enm: false }
+        return RetInfo { str: false, arr: false, sid: -1, enm: false, elem: -1 }
     }
     if ty_is_array(ret[0]) {
-        return RetInfo { str: false, arr: true, sid: -1, enm: false }
+        return RetInfo { str: false, arr: true, sid: -1, enm: false, elem: elem_type_code(elem_ty_of(ret[0]), structs.names, enum_names) }
     }
     if ty_is_string(ret[0]) {
-        return RetInfo { str: true, arr: false, sid: -1, enm: false }
+        return RetInfo { str: true, arr: false, sid: -1, enm: false, elem: -1 }
     }
     match ret[0] {
         case TyName(qual, name) {
             if cg_index_of(enum_names, name) >= 0 {
-                return RetInfo { str: false, arr: false, sid: -1, enm: true }
+                return RetInfo { str: false, arr: false, sid: -1, enm: true, elem: -1 }
             }
-            return RetInfo { str: false, arr: false, sid: cg_index_of(structs.names, name), enm: false }
+            return RetInfo { str: false, arr: false, sid: cg_index_of(structs.names, name), enm: false, elem: -1 }
         }
         case TyGeneric(qual, name, args) {
             // a generic ENUM (`Option<…>`/`Result<…>`) is a move value; a generic STRUCT (`Box<Expr>`) returns
             // BOXED, bound by its BASE struct id (field layout is the base — the instance id only rides the
             // NEW_STRUCT operand at construction).
             if cg_index_of(enum_names, name) >= 0 {
-                return RetInfo { str: false, arr: false, sid: -1, enm: true }
+                return RetInfo { str: false, arr: false, sid: -1, enm: true, elem: -1 }
             }
-            return RetInfo { str: false, arr: false, sid: cg_index_of(structs.names, name), enm: false }
+            return RetInfo { str: false, arr: false, sid: cg_index_of(structs.names, name), enm: false, elem: -1 }
         }
         case _ {
-            return RetInfo { str: false, arr: false, sid: -1, enm: false }
+            return RetInfo { str: false, arr: false, sid: -1, enm: false, elem: -1 }
         }
     }
 }
@@ -3656,6 +3863,7 @@ struct FnRets {
     arr: [bool]
     sid: [int]
     enm: [bool]
+    elem: [int]
 }
 
 
@@ -3664,6 +3872,7 @@ fn build_fn_rets(decls: [ps.Decl], structs: StructTable, enum_names: [string]) -
     var ra: [bool] = []
     var rsid: [int] = []
     var ren: [bool] = []
+    var rel: [int] = []
     var i = 0
     loop {
         if i >= decls.len() {
@@ -3681,6 +3890,7 @@ fn build_fn_rets(decls: [ps.Decl], structs: StructTable, enum_names: [string]) -
                     ra.append(r.arr)
                     rsid.append(r.sid)
                     ren.append(r.enm)
+                    rel.append(r.elem)
                     mi = mi + 1
                 }
             }
@@ -3690,13 +3900,14 @@ fn build_fn_rets(decls: [ps.Decl], structs: StructTable, enum_names: [string]) -
                 ra.append(r.arr)
                 rsid.append(r.sid)
                 ren.append(r.enm)
+                rel.append(r.elem)
             }
             case _ {
             }
         }
         i = i + 1
     }
-    return FnRets { str: rs, arr: ra, sid: rsid, enm: ren }
+    return FnRets { str: rs, arr: ra, sid: rsid, enm: ren, elem: rel }
 }
 
 
@@ -3770,7 +3981,7 @@ fn compile_fn(f: ps.FnDecl, fn_names: [string], fn_rets: FnRets, structs: Struct
     var loopb: [int] = []
     var brkj: [int] = []
     var brkb: [int] = []
-    var ch = Chunk { code: code, lines: lines, const_is_float: cif, const_int: ci, const_float: cf, strings: strs, locals: locals, local_str: lstr, local_drop: ldr, cur_line: 0, fn_names: clone_strs(fn_names), fn_ret_str: clone_bools(fn_rets.str), fn_ret_arr: clone_bools(fn_rets.arr), fn_ret_sid: clone_ints(fn_rets.sid), fn_ret_enum: clone_bools(fn_rets.enm), cont_targets: conts, loop_bases: loopb, break_jumps: brkj, break_bases: brkb, slot_struct: sslot, slot_boxed: sbox, slot_array: sarr, slot_elem: selem, slot_kind: skind, cur_return_span: 0, st_names: clone_strs(structs.names), st_fowner: clone_ints(structs.f_owner), st_fname: clone_strs(structs.f_name), st_fscalar: clone_bools(structs.f_scalar), st_fstring: clone_bools(structs.f_string), st_farray: clone_bools(structs.f_array), st_fstruct: clone_ints(structs.f_struct), st_felem: clone_ints(structs.f_elem), st_farrkind: clone_ints(structs.f_arrkind), st_fenum: clone_bools(structs.f_enum), inst_keys: clone_strs(instances), et_names: clone_strs(enums.e_names), ev_owner: clone_ints(enums.v_owner), ev_name: clone_strs(enums.v_name), ev_tag: clone_ints(enums.v_tag), ev_arity: clone_ints(enums.v_arity), ev_fvar: clone_ints(enums.vf_var), ev_fstring: clone_bools(enums.vf_string), ev_fstruct: clone_ints(enums.vf_struct), ev_farray: clone_bools(enums.vf_array), ev_felem: clone_ints(enums.vf_elem), ev_fenum: clone_bools(enums.vf_enum), ev_fkind: clone_ints(enums.vf_kind), gc_names: clone_strs(globals.names), gc_kind: clone_ints(globals.kind), gc_ival: clone_ints(globals.ival), gc_sval: clone_strs(globals.sval), gc_bval: clone_bools(globals.bval), gc_fval: clone_floats(globals.fval) }
+    var ch = Chunk { code: code, lines: lines, const_is_float: cif, const_int: ci, const_float: cf, strings: strs, locals: locals, local_str: lstr, local_drop: ldr, cur_line: 0, fn_names: clone_strs(fn_names), fn_ret_str: clone_bools(fn_rets.str), fn_ret_arr: clone_bools(fn_rets.arr), fn_ret_elem: clone_ints(fn_rets.elem), fn_ret_sid: clone_ints(fn_rets.sid), fn_ret_enum: clone_bools(fn_rets.enm), cont_targets: conts, loop_bases: loopb, break_jumps: brkj, break_bases: brkb, slot_struct: sslot, slot_boxed: sbox, slot_array: sarr, slot_elem: selem, slot_kind: skind, cur_return_span: 0, st_names: clone_strs(structs.names), st_fowner: clone_ints(structs.f_owner), st_fname: clone_strs(structs.f_name), st_fscalar: clone_bools(structs.f_scalar), st_fstring: clone_bools(structs.f_string), st_farray: clone_bools(structs.f_array), st_fstruct: clone_ints(structs.f_struct), st_felem: clone_ints(structs.f_elem), st_farrkind: clone_ints(structs.f_arrkind), st_fenum: clone_bools(structs.f_enum), inst_keys: clone_strs(instances), et_names: clone_strs(enums.e_names), ev_owner: clone_ints(enums.v_owner), ev_name: clone_strs(enums.v_name), ev_tag: clone_ints(enums.v_tag), ev_arity: clone_ints(enums.v_arity), ev_fvar: clone_ints(enums.vf_var), ev_fstring: clone_bools(enums.vf_string), ev_fstruct: clone_ints(enums.vf_struct), ev_farray: clone_bools(enums.vf_array), ev_felem: clone_ints(enums.vf_elem), ev_fenum: clone_bools(enums.vf_enum), ev_fkind: clone_ints(enums.vf_kind), gc_names: clone_strs(globals.names), gc_kind: clone_ints(globals.kind), gc_ival: clone_ints(globals.ival), gc_sval: clone_strs(globals.sval), gc_bval: clone_bools(globals.bval), gc_fval: clone_floats(globals.fval) }
     ch.cur_return_span = ch.return_struct_span(f.ret)
     if self_struct_id >= 0 {
         // a method receiver: `self` is a BOXED struct in slot 0 (so self.field is GET_FIELD even for an

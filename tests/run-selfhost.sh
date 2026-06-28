@@ -287,7 +287,7 @@ if [ -f "$CGSRC" ]; then
     done
     # Self-compiling WHOLE MODULES: real compiler modules the self-hosted backend now reproduces
     # byte-identically end-to-end (not just curated fixtures). The list grows as each module goes green.
-    for m in selfhost/lexer.em selfhost/parser.em; do
+    for m in selfhost/lexer.em selfhost/parser.em selfhost/checker.em selfhost/codegen.em; do
         oracle=$(cd "$ROOT" && "$BIN" --emit=bytecode "$m" 2>/dev/null)
         if [ -n "$cgbin" ]; then
             actual=$(cd "$ROOT" && "$cgbin" "$m" 2>/dev/null | sed '/^=> 0$/d')

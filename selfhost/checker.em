@@ -167,6 +167,8 @@ struct Checker {
     sf_owner: [int]            // struct-field table: owning struct index (parallel to `structs`)
     sf_name: [string]          // ...field name
     sf_type: [int]             // ...field SemType (TY_INFER for any non-primitive)
+    sf_tparam: [int]           // ...if the field's type is a bare generic type-param `T`, its index; else -1
+                               // (lets `Box<int>{value: …}` substitute T→int and type-check the field value)
     sm_owner: [int]            // struct-method table: owning struct index
     sm_name: [string]          // ...method name
     sm_arity: [int]            // ...declared param count (self excluded)
@@ -922,6 +924,7 @@ struct Checker {
                         self.sf_owner.append(sid)
                         self.sf_name.append(fields[fi].name)
                         self.sf_type.append(ft)
+                        self.sf_tparam.append(ty_tparam_index(generics, fields[fi].ty))
                         if ft == TY_PTR && has_drop == false {
                             self.error("a 'Ptr' is a linear FFI handle and cannot be a struct field")
                         }
@@ -1200,6 +1203,53 @@ struct Checker {
     }
 
 
+    // check_variant_payload checks a prelude generic-enum construction against an EXPECTED annotation: for
+    // `let x: Option<int> = Some(v)` / `Result<T,E> = Ok(v)/Err(v)`, the payload `v`'s type must match the
+    // annotation's type argument (Some/Ok → arg 0, Err → arg 1). The type comes from the annotation (the
+    // construction carries no type args), so this is a use-site substitution. A TY_INFER payload is lenient;
+    // only a concrete mismatch is rejected. (User generic enums aren't covered — needs general inference.)
+    fn check_variant_payload(mut self, ann: ps.Ty, value: ps.Expr) {
+        match ann {
+            case TyGeneric(qual, tname, targs) {
+                if qual != "" {
+                    return
+                }
+                match value {
+                    case ECall(callee, cargs) {
+                        match callee.value {
+                            case EIdent(vn) {
+                                var pidx = 0 - 1
+                                if tname == "Option" && vn == "Some" {
+                                    pidx = 0
+                                }
+                                if tname == "Result" && vn == "Ok" {
+                                    pidx = 0
+                                }
+                                if tname == "Result" && vn == "Err" {
+                                    pidx = 1
+                                }
+                                if pidx >= 0 && pidx < targs.len() && cargs.len() == 1 {
+                                    let want = self.annotation_type(targs[pidx])
+                                    let got = self.check_expr(cargs[0])
+                                    if assignable(got, want, is_int_literal(cargs[0]), is_float_literal(cargs[0])) == false {
+                                        self.error("the variant payload's type does not match the annotation's type argument")
+                                    }
+                                }
+                            }
+                            case _ {
+                            }
+                        }
+                    }
+                    case _ {
+                    }
+                }
+            }
+            case _ {
+            }
+        }
+    }
+
+
     // ty_arg_types resolves a `Name<A, B, …>` annotation's type arguments to their SemTypes (empty for a
     // bare `Name`). Used to check a struct-literal's `<…>` arguments against the struct's generic bounds.
     fn ty_arg_types(self, t: ps.Ty) -> [int] {
@@ -1400,6 +1450,7 @@ struct Checker {
                     if assignable(vt, bt, is_int_literal(value.value), is_float_literal(value.value)) == false {
                         self.error("binding annotation does not match the value's type")
                     }
+                    self.check_variant_payload(ty[0], value.value)   // Option<int> = Some("s") → payload mismatch
                     self.declare(name, bt, is_var, true, false)     // an annotated binding carries its declared type
                 } else {
                     // No annotation → the initialiser must be self-inferring. stage-0 threads an EXPECTED type
@@ -2097,11 +2148,15 @@ struct Checker {
                     }
                     return TY_INFER
                 }
+                // The construction's explicit `<…>` type arguments (empty for a non-generic struct), resolved
+                // once: drives the generic-arity check, the interface-bound check, and field substitution.
+                let argtys = self.ty_arg_types(ty.value)
+                let unqual = ty_qual(ty.value) == ""
                 // The `<…>` type-argument count must EXACTLY equal the struct's generic-parameter count: a
                 // generic `Box<T>` requires `Box<X>` (not bare `Box`), a non-generic `P` rejects `P<int>`,
                 // and `Box<A,B>` is wrong. Skip a qualified (imported) type — its arity isn't known here.
-                if ty_qual(ty.value) == "" {
-                    if ty_arg_count(ty.value) != self.struct_garity[si] {
+                if unqual {
+                    if argtys.len() != self.struct_garity[si] {
                         self.error("wrong number of type arguments for this struct")
                     }
                     // Each type argument must satisfy its parameter's INTERFACE bound (Hash/Eq/…) — checked at
@@ -2109,7 +2164,6 @@ struct Checker {
                     // satisfies by `implements`; a scalar/string by the built-in keyable interfaces; anything
                     // unmodelled (TY_INFER) stays lenient. (A `Copy` bound is skipped here — stage-0 only
                     // enforces it alongside a witness-bearing interface bound; no corpus target needs it.)
-                    let argtys = self.ty_arg_types(ty.value)
                     var bi = 0
                     loop {
                         if bi >= self.sg_struct.len() {
@@ -2137,7 +2191,14 @@ struct Checker {
                     if row < 0 {
                         self.error("no such field on this struct")
                     } else {
-                        if assignable(vt, self.sf_type[row], is_int_literal(fields[i].value), is_float_literal(fields[i].value)) == false {
+                        // A field declared as a bare type-param `T` is expected at the construction's concrete
+                        // type argument (`Box<int>{value: …}` ⇒ value: int) — substitute it before the check.
+                        var expected = self.sf_type[row]
+                        let fg = self.sf_tparam[row]
+                        if unqual && fg >= 0 && fg < argtys.len() {
+                            expected = argtys[fg]
+                        }
+                        if assignable(vt, expected, is_int_literal(fields[i].value), is_float_literal(fields[i].value)) == false {
                             self.error("field value type does not match the declared field")
                         }
                     }
@@ -2557,6 +2618,34 @@ fn gp_names(gs: [ps.GenericParam]) -> [string] {
 }
 
 
+// ty_tparam_index returns the generic-parameter index a type annotation names when it is a BARE unqualified
+// type-param `T` matching one of `generics` (else -1) — so a generic field/payload `value: T` can be
+// substituted with the construction's explicit type argument and its value type-checked.
+fn ty_tparam_index(generics: [ps.GenericParam], t: ps.Ty) -> int {
+    match t {
+        case TyName(qual, name) {
+            if qual != "" {
+                return 0 - 1
+            }
+            var i = 0
+            loop {
+                if i >= generics.len() {
+                    break
+                }
+                if generics[i].name == name {
+                    return i
+                }
+                i = i + 1
+            }
+            return 0 - 1
+        }
+        case _ {
+            return 0 - 1
+        }
+    }
+}
+
+
 // is_unbounded_tparam reports whether a value parameter's type is a bare generic type-param with NO interface
 // bound (a `T`, or even `T: Copy` — Copy is not an interface, so it provides no methods). A method call on
 // such a binding is an error (check.c:4073). A bounded `T: Ord`/`T: Hash` keeps its interface methods.
@@ -2781,6 +2870,7 @@ fn check(src: string) -> bool {
     var simpl_iface: [string] = []
     var newtypes: [string] = []
     var sf_owner: [int] = []
+    var sf_tparam: [int] = []
     var sf_name: [string] = []
     var sf_type: [int] = []
     var sm_owner: [int] = []
@@ -2802,7 +2892,7 @@ fn check(src: string) -> bool {
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, fn_ptparam: fn_ptparam, fn_extern: fn_extern, fg_name: fg_name, fg_param: fg_param, fg_bound: fg_bound, struct_garity: struct_garity, sg_struct: sg_struct, sg_param: sg_param, sg_bound: sg_bound, simpl_struct: simpl_struct, simpl_iface: simpl_iface, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, nursery_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, local_unbounded_tp: [], scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, fn_ptparam: fn_ptparam, fn_extern: fn_extern, fg_name: fg_name, fg_param: fg_param, fg_bound: fg_bound, struct_garity: struct_garity, sg_struct: sg_struct, sg_param: sg_param, sg_bound: sg_bound, simpl_struct: simpl_struct, simpl_iface: simpl_iface, newtypes: newtypes, sf_owner: sf_owner, sf_tparam: sf_tparam, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, nursery_depth: 0, locals: locals, local_moved: [], local_consumed: [], loop_break_consumed: [], loop_saw_break: false, local_unbounded_tp: [], scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

@@ -124,6 +124,7 @@ struct Checker {
     aliases: [string]          // import aliases
     fn_names: [string]         // top-level free-function names, parallel to fn_arity (for the arity check)
     fn_arity: [int]            // ...and their declared parameter counts (self excluded)
+    fn_ret: [int]              // ...and their return SemType (TY_PTR for an `fopen`-style extern; TY_UNIT void)
     fn_pstart: [int]           // ...start index into fn_ptype for this fn's params
     fn_ptype: [int]            // every free-fn param SemType, concatenated (arg-type check)
     fn_pqual: [int]            // ...and each param's qualifier (0 none / 1 mut / 2 move), parallel to fn_ptype
@@ -500,6 +501,11 @@ struct Checker {
                         pp = pp + 1
                     }
                     self.fn_arity.append(pc)
+                    if f.ret.len() > 0 {
+                        self.fn_ret.append(self.annotation_type(f.ret[0]))
+                    } else {
+                        self.fn_ret.append(TY_UNIT)
+                    }
                 }
                 case DStruct(name, generics, impls, fields, methods) {
                     if self.is_duplicate_type(name) {
@@ -567,6 +573,27 @@ struct Checker {
                             break
                         }
                         self.fns.append(fns[e].name)
+                        // Unify externs into the free-fn tables (an extern is a callable with a signature): the
+                        // call site gets arity/arg checks AND the move-arg consume — so `fopen` types a Ptr open
+                        // and `fclose(move f: Ptr)` consumes it, for free.
+                        self.fn_names.append(fns[e].name)
+                        var ec = 0
+                        var ep = 0
+                        loop {
+                            if ep >= fns[e].params.len() {
+                                break
+                            }
+                            if fns[e].params[ep].is_self == false {
+                                ec = ec + 1
+                            }
+                            ep = ep + 1
+                        }
+                        self.fn_arity.append(ec)
+                        if fns[e].ret.len() > 0 {
+                            self.fn_ret.append(self.annotation_type(fns[e].ret[0]))
+                        } else {
+                            self.fn_ret.append(TY_UNIT)
+                        }
                         e = e + 1
                     }
                 }
@@ -608,6 +635,28 @@ struct Checker {
                             self.fn_pqual.append(f.params[p].qual)
                         }
                         p = p + 1
+                    }
+                }
+                case DExtern(abi, fns) {
+                    // mirror DFn: the extern param tables (types + quals), parallel to register's fn_names
+                    var e = 0
+                    loop {
+                        if e >= fns.len() {
+                            break
+                        }
+                        self.fn_pstart.append(self.fn_ptype.len())
+                        var ep = 0
+                        loop {
+                            if ep >= fns[e].params.len() {
+                                break
+                            }
+                            if fns[e].params[ep].is_self == false {
+                                self.fn_ptype.append(self.param_type(fns[e].params[ep]))
+                                self.fn_pqual.append(fns[e].params[ep].qual)
+                            }
+                            ep = ep + 1
+                        }
+                        e = e + 1
                     }
                 }
                 case DStruct(name, generics, impls, fields, methods) {
@@ -1055,25 +1104,36 @@ struct Checker {
             }
             case SAssign(target, value) {
                 let vt = self.check_expr(value.value)
-                self.check_expr(target.value)            // name-resolve the target (catches an undefined root)
+                self.consume_move(value.value, value.line)   // the RHS is consumed into the target (an owner)
                 match target.value {
                     case EIdent(name) {
-                        if self.resolve_local(name) {
+                        // the target is a WRITE, not a use — resolve it without firing use-after-move, then
+                        // REVIVE it: a reassignment gives the binding a fresh value (check.c:5871).
+                        if self.is_known(name) == false {
+                            self.error("undefined variable")
+                        } else if self.resolve_local(name) {
                             if self.local_is_var(name) == false {
                                 self.error("cannot assign to an immutable 'let' binding; declare it with 'var'")
                             }
                             if assignable(vt, self.local_type(name), is_int_literal(value.value), is_float_literal(value.value)) == false {
                                 self.error("assigned value's type does not match the variable")
                             }
+                            let slot = self.local_slot(name)
+                            if slot >= 0 {
+                                self.local_moved[slot] = false
+                            }
                         }
                     }
                     case EGet(object, fname) {
+                        self.check_expr(target.value)
                         self.check_immutable_root(target.value, true)
                     }
                     case EIndex(object, index) {
+                        self.check_expr(target.value)
                         self.check_immutable_root(target.value, false)
                     }
                     case _ {
+                        self.check_expr(target.value)
                     }
                 }
             }
@@ -1087,11 +1147,11 @@ struct Checker {
                 let pre = clone_bools(self.local_moved)
                 self.check_block(then_blk)
                 let then_state = clone_bools(self.local_moved)
-                let then_div = block_returns(then_blk)
+                let then_div = block_diverges(then_blk)
                 self.local_moved = clone_bools(pre)              // restore: the else path starts fresh
                 if els.len() > 0 {
                     self.check_stmt(els[0])
-                    let else_div = stmt_returns(els[0])
+                    let else_div = stmt_diverges(els[0])
                     if then_div {
                         if else_div == false {
                             // only else reaches the join — keep the else state (current)
@@ -1240,7 +1300,7 @@ struct Checker {
                     }
                     self.truncate_locals(saved)
                     self.scope_depth = self.scope_depth - 1
-                    if block_returns(cases[ci].body) == false {   // a diverging arm doesn't reach the join
+                    if block_diverges(cases[ci].body) == false {   // a diverging arm doesn't reach the join
                         var mi = 0
                         loop {
                             if mi >= acc.len() {
@@ -1485,6 +1545,12 @@ struct Checker {
                     case EIdent(name) {
                         if self.resolve_local(name) == false && is_builtin(name) {
                             return builtin_ret_type(name)
+                        }
+                        if self.resolve_local(name) == false {
+                            let fi = self.fn_index_of(name)      // a free-fn / extern call: its declared return
+                            if fi >= 0 {
+                                return self.fn_ret[fi]
+                            }
                         }
                     }
                     case EGet(object, mname) {
@@ -1778,6 +1844,55 @@ fn stmt_exits_loop(s: ps.Stmt) -> bool {
 }
 
 
+// block_diverges / stmt_diverges report whether a statement (sequence) does NOT fall through to the code
+// after it on any path — via return, break, OR continue (each leaves the current straight-line flow). Used by
+// the branch merge so a branch that breaks/continues (not just returns) doesn't contribute its moved-set to
+// the join. A nested loop/for is opaque (its break/continue targets the inner loop).
+fn block_diverges(body: [ps.Stmt]) -> bool {
+    var i = 0
+    loop {
+        if i >= body.len() {
+            break
+        }
+        if stmt_diverges(body[i]) {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+
+fn stmt_diverges(s: ps.Stmt) -> bool {
+    match s {
+        case SReturn(value, line) {
+            return true
+        }
+        case SBreak(line) {
+            return true
+        }
+        case SContinue(line) {
+            return true
+        }
+        case SBlock(body) {
+            return block_diverges(body)
+        }
+        case SIf(cond, then_blk, els) {
+            if els.len() == 0 {
+                return false
+            }
+            return block_diverges(then_blk) && stmt_diverges(els[0])
+        }
+        case SLoop(body) {
+            return loop_exit_break(body) == false
+        }
+        case _ {
+            return false
+        }
+    }
+}
+
+
 fn block_returns(body: [ps.Stmt]) -> bool {
     var i = 0
     loop {
@@ -2029,6 +2144,7 @@ fn check(src: string) -> bool {
     var aliases: [string] = []
     var fn_names: [string] = []
     var fn_arity: [int] = []
+    var fn_ret: [int] = []
     var fn_pstart: [int] = []
     var fn_ptype: [int] = []
     var fn_pqual: [int] = []
@@ -2055,7 +2171,7 @@ fn check(src: string) -> bool {
     var tparams: [string] = []
     var locals: [Local] = []
     var diags: [string] = []
-    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, local_moved: [], scope_depth: 0, diags: diags }
+    var c = Checker{ fns: fns, structs: structs, enums: enums, variants: variants, globals: globals, aliases: aliases, fn_names: fn_names, fn_arity: fn_arity, fn_ret: fn_ret, fn_pstart: fn_pstart, fn_ptype: fn_ptype, fn_pqual: fn_pqual, newtypes: newtypes, sf_owner: sf_owner, sf_name: sf_name, sf_type: sf_type, sm_owner: sm_owner, sm_name: sm_name, sm_arity: sm_arity, sm_pstart: sm_pstart, sm_ptype: sm_ptype, sm_mutself: sm_mutself, sm_moveself: sm_moveself, sm_ret: sm_ret, ev_enum: ev_enum, ev_name: ev_name, ev_arity: ev_arity, ifaces: ifaces, im_iface: im_iface, im_name: im_name, im_arity: im_arity, im_ret: im_ret, tparams: tparams, current_return: TY_UNIT, self_is_var: false, loop_depth: 0, locals: locals, local_moved: [], scope_depth: 0, diags: diags }
     c.register(decls)                    // pass 1: NAMES (so forward references resolve)
     c.register_types(decls)              // pass 1b: signatures, fields, variants (needs names registered)
     c.check_all(decls)                   // pass 2: bodies

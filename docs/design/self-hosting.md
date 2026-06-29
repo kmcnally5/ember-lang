@@ -639,17 +639,27 @@ The VM fixed point is reached and the M3b ownership dataflow has shipped, so the
 3. **The standalone bootstrap — STARTED.** **Step 1 LANDED:** `selfhost/emberc.em`, the UNIFIED driver
    (lex → parse → check → codegen as one program), compiled to a native self-built compiler binary that
    rejects ill-typed programs (exit 65), emits valid bytecode byte-identical to stage-0, and reproduces all
-   four of its own modules (gated, Stage 5 of `make selfhost`). **Step 2 — the M5 C-emit backend — KICKED
-   OFF.** Decision (recorded): emit C and let clang build the native binary, rather than a bytecode
+   four of its own modules (gated, Stage 5 of `make selfhost`). **Step 2 — the M5 C-emit backend — IN
+   PROGRESS.** Decision (recorded): emit C and let clang build the native binary, rather than a bytecode
    serialization format + a stage-0 loader — because it mirrors Ember's *existing* architecture (stage-0
    already has a C-emit native backend, `--emit=c`/`-o`), completes the self-hosting mirror (the 5th of
    stage-0's 5 components), reuses the *same* byte-identical differential (`--emit=c` is the oracle, vs no
    oracle for serialized bytecode), produces Ember's native artifact with nothing new added to stage-0, and
    walks toward the kernel's bare-metal codegen. `selfhost/cgen_c.em` + `cgen_c_dump.em` + the `tools/ccdiff.sh`
-   differential harness are in; **the program SCAFFOLD is byte-identical** to stage-0 on a minimal program,
-   and the self-hosted C output compiles with clang and runs (`=> 0`). Built incrementally like the bytecode
-   `codegen.em` (M5a scalars → strings → structs → control flow → …). Next: scalar expressions (calls /
-   binops via the retain dance).
+   differential harness drive it, gated as Stage 6 of `make selfhost` (one fixture per increment under
+   `tests/selfhost/cgen_c/`, each byte-identical to stage-0 `--emit=c` on BOTH the VM and the self-built
+   native binary). Built incrementally like the bytecode `codegen.em`: **M5a int-scalar expressions**
+   (literals/idents/binops via the retain dance + user calls), **M5b strings** (interned literals + the
+   `em_add` ownership/drop discipline), **M5c control flow** (if/else-if, `loop`/`break`/`continue`, range
+   & array `for`, scalar `var` reassignment, per-block scope drops), and **M5d arrays** (literals →
+   `em_array`, empty arrays from the annotation, `em_index`, `.len()`/`.append()`, scalar bindings derived
+   from an array — `let n = xs.len()`, `let x = xs[i]` — array params as borrows, `for` over a param/local/
+   literal with the temp-iterable drop, returning an owned array as a slot-niling move, array `var`
+   reassignment as drop-old-then-store, owning-temp array call args dropped after the call, and `.len()` on a
+   temp receiver) — **all byte-identical**. OFI-166 (the C operand-eval-order discipline — sequence side-
+   effecting subexpressions into ordered statements; gcc evaluates a binop/call's operands right-to-left
+   where clang/the VM go left-to-right) is observed throughout, verified on Linux gcc via Docker before each
+   push. Next: structs + methods (the hard middle), then enums/match, then generics/monomorphization.
 4. **M4 deferred-low — nested-inline struct flattening.** The `UNBOX_STRUCT` path for a `let ln =
    Line{a:P, b:P}` of recursively-all-scalar nested value structs; only ~3 corpus files need it (most real
    structs have a string/array/enum field → boxed), so it stays low priority.

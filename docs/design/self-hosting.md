@@ -713,9 +713,15 @@ The VM fixed point is reached and the M3b ownership dataflow has shipped, so the
    typing — `let e = arr[i]` on a `[Struct]` array retains the em_index clone into an OWNED boxed-struct local
    (dropped at scope exit), and `e.field` resolves as an em_enum_field read (element struct sid tracked per
    binding via sc_elem_struct, from the `[Struct]` annotation on a param / `var xs: [Struct] = []`). **Remaining
-   lexer tail** (each a specific ownership text distinction): `arr[i].field` DIRECTLY (a temp element needs a
-   materialise-retain-drop wrapper), a string-field consumed by `+` (own_into_slot vs the borrow retain-dance),
-   one owned-string-local's liveness, and string interpolation (206 sites). Then generics (Option/Result
+   lexer tail** (each a specific ownership text distinction). **M5k (done, fixture `field_ownership.em`)**
+   closed several: a REFCOUNTED (string/enum) boxed field CONSUMED by `+` is `own_into_slot(&g_em,
+   em_enum_field(…))` inside the balance-retain (not the plain borrow retain-dance a `==`/`!=` operand gets);
+   a string-returning METHOD result bound to a local is an OWNED string; and `main_index` defaults to `em_fn_0`
+   for a standalone module compile with no `main` (a dogfood artifact — the lexer is imported, not run). **The
+   lexer is now down to essentially ONE diff hunk** (an owned string from a method, used twice in a token-build,
+   needing the move+drop). Remaining tail: that double-use liveness, `arr[i].field` DIRECTLY (temp element →
+   materialise-retain-drop), an empty struct-array as a struct FIELD value (em_struct_array), `.len()` on a
+   call-result string (temp-receiver drop), and string interpolation (206 sites). Then generics (Option/Result
    monomorphization, arrays-of-structs). Orthogonal follow-up: float-literal emission needs a `%.17g` builtin
    (Ember interpolation is `%g`, so `FLOAT_VAL` can't be produced from a bare `{f}`). OFI-166 (the C
    operand-eval-order discipline — sequence side-effecting subexpressions into ordered statements; gcc

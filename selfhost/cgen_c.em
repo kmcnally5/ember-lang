@@ -1658,7 +1658,14 @@ struct CgcGen {
                 // (1) `self.field` — self is the borrowed method receiver (a by-value struct param / let field
                 // is an owned COPY, NOT retained). (2) a BOXED-struct field read (em_enum_field borrows — the
                 // struct owns the field). A value-struct scalar field makes the IS_OBJ retain a no-op.
-                if self.is_self_field(object.value) || self.boxed_sid_of(object.value) >= 0 {
+                let bsid = self.boxed_sid_of(object.value)
+                if bsid >= 0 && consuming && self.st.field_is_refcounted(bsid, name) {
+                    // a refcounted (string / enum) field CONSUMED by `+` is owned into the concat (own_into_slot,
+                    // moves_local==2) and then the consuming op's balance-retain wraps it (cgen_c.c).
+                    let v = self.fresh_var()
+                    return "(\{ Value v{v} = own_into_slot(&g_em, {self.emit_expr(e)}); if (IS_OBJ(v{v})) OBJ_RETAIN(AS_OBJ(v{v})); v{v}; \})"
+                }
+                if self.is_self_field(object.value) || bsid >= 0 {
                     return self.retain_dance(e)
                 }
             }
@@ -2123,6 +2130,16 @@ struct CgcGen {
                         }
                         if native_ret_kind(name) == 0 - 3 {
                             return true                  // a string-returning native builtin (byte_slice, read_file, …)
+                        }
+                    }
+                    case EGet(object, mname) {
+                        // a string-returning METHOD call `let v = recv.method(…)`.
+                        let sid = self.struct_sid_any(object.value)
+                        if sid >= 0 {
+                            let fi = self.fn_index("{self.st.names[sid]}.{mname}")
+                            if fi >= 0 {
+                                return self.fn_ret_str[fi]
+                            }
                         }
                     }
                     case _ {
@@ -3048,7 +3065,7 @@ fn main_index(decls: [ps.Decl]) -> int {
         }
         i = i + 1
     }
-    return 0 - 1
+    return 0                            // no `main` (a standalone module compile): stage-0's plan defaults to em_fn_0
 }
 
 

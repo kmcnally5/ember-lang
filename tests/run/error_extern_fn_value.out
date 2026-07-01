@@ -1,0 +1,1 @@
+tests/run/error_extern_fn_value.em:11:13: error: a foreign (extern "c") function cannot be used as a function value; call it directly

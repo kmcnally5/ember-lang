@@ -1106,6 +1106,8 @@ static Expr *parse_postfix(Parser *p) {
             call->as.call.box_result    = 1;      // default: box a multi-slot result
             call->as.call.cextern_index = -1;     // set by the checker for an extern "c" call (§5h)
             call->as.call.cextern_ret_sid = -1;   // set by the checker for a struct-returning extern
+            call->as.call.extern_direct = 0;      // OFI-167: set by the checker for a native direct-extern
+            call->as.call.extern_cname  = NULL;
             call->as.call.newtype_ctor  = 0;
             call->as.call.refinement    = NULL;
             e = call;

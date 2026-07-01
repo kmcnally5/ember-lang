@@ -257,6 +257,13 @@ struct Expr {
             // FFI structs-by-value (3b.6): the Ember struct id the C function RETURNS, so the VM
             // reassembles a struct from the wrapper's result leaves; -1 for a scalar return.
             int         cextern_ret_sid;
+            // OFI-167 (native direct-extern): this call targets an `extern "c"` function that is
+            // NOT in the hosted FFI registry, so the native backend emits a DIRECT call to the C
+            // symbol `extern_cname` (linker-resolved against a freestanding shim), not the registry
+            // trampoline `em_ffi`. 0 for an ordinary/registry call. Native-only: the VM has no
+            // binding for such a symbol, so codegen reports a clear error.
+            int         extern_direct;
+            const char *extern_cname;
             int         newtype_ctor;   // OFI-149: this call is a newtype construction (codegen passthrough)
             Expr       *refinement;     // OFI-150: a refined newtype's `where` predicate to check here, or NULL
         } call;

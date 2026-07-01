@@ -744,6 +744,19 @@ static void gen_expr_raw(Codegen *cg, const Expr *e) {
                 break;
             }
 
+            // OFI-167: a native direct-extern call — an `extern "c"` symbol NOT in the hosted FFI
+            // registry (e.g. a kernel MMIO helper like `uart_putc`) — has no bytecode-VM binding; it
+            // is resolved by the linker only on the native (`--emit=c`) path. Reject it cleanly here
+            // (a legitimate native-only program, not a checker/codegen fault, so not internal_error).
+            if (e->as.call.extern_direct) {
+                fprintf(stderr,
+                        "%s: error: extern \"c\" function '%s' is not in the hosted FFI registry, so "
+                        "it has no bytecode-VM binding; build native with `emberc --emit=c` / `-o`\n",
+                        cg->src, e->as.call.extern_cname ? e->as.call.extern_cname : "?");
+                cg->had_error = 1;
+                break;
+            }
+
             // Foreign (C) call (FFI, §5h / 3b.6): push each argument as its scalar LEAVES (a
             // struct arg is flattened via gen_arg, like a multi-slot param), then dispatch through
             // the C registry by index. The 16-bit operand is the return struct id (0xFFFF for a

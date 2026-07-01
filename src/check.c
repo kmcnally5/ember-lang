@@ -419,6 +419,9 @@ typedef struct {
     int         fn_index;             // slot in the compiled function table
     int         cextern_index;        // FFI (§5h): C-registry index if this is an `extern "c"`
                                       // function (no bytecode slot); -1 for an ordinary function
+    int         direct_extern;        // OFI-167: an `extern "c"` fn NOT in the hosted registry — the
+                                      // native backend emits a direct call to `name`; the VM has no
+                                      // binding (native-only). 0 for a registry extern or Ember fn.
     const FnDecl *decl;               // the function's AST declaration — its source position and
                                       // (via the shared formatter) its signature, for the LSP index
 } FnSig;
@@ -2898,6 +2901,8 @@ static Expr *synth_show_call(Checker *c, Expr *recv, SemType recv_ty,
     call->as.call.box_result   = 0;
     call->as.call.cextern_index = -1;
     call->as.call.cextern_ret_sid = -1;
+    call->as.call.extern_direct = 0;   // OFI-167: show() is an Ember call, never a direct extern
+    call->as.call.extern_cname  = NULL;
     return call;
 }
 
@@ -3136,7 +3141,7 @@ static SemType check_fn_call(Checker *c, Expr *e, FnSig *sig, SemType expected) 
     // and Ember keeps ownership. So skip the consume below; the only thing the caller must do
     // is release a fresh OWNING TEMP afterward (e.g. the literals in `fopen("f","r")`), which
     // the drop_mask path handles exactly like an owned struct temp.
-    int is_extern = sig->cextern_index >= 0;
+    int is_extern = sig->cextern_index >= 0 || sig->direct_extern;   // OFI-167: direct externs borrow too
     // `move` arguments are consumed (their binding is moved out); a refcounted argument is also
     // consumed, since the callee owns a reference to it and releases it on return — consuming an
     // aliased argument increfs it, while a fresh temporary is simply adopted.
@@ -3608,6 +3613,17 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
             int fi = resolve_signature(c, e->as.ident);
             if (fi >= 0) {
                 FnSig *sig = &c->fns[fi];
+                // A foreign (extern "c") function has NO bytecode slot (fn_index == -1) — whether a
+                // hosted-registry extern (dispatched by index) or a native direct-extern (OFI-167) —
+                // so it cannot be closed over or called indirectly. Taking one as a value would emit
+                // a closure over function index -1 (OP_MAKE_CLOSURE / em_closure(-1)), which the VM
+                // then indexes out of bounds → a crash. Reject it, like `spawn` of an extern (OFI-168).
+                if (sig->cextern_index >= 0 || sig->direct_extern) {
+                    type_error(c, e->line, e->col,
+                               "a foreign (extern \"c\") function cannot be used as a function value; "
+                               "call it directly");
+                    return TY_ERROR;
+                }
                 if (sig->generic_count != 0) {
                     type_error(c, e->line, e->col,
                                "a generic function cannot yet be used as a value");
@@ -5012,6 +5028,8 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
             FnSig *sig = &c->fns[idx];
             e->as.call.resolved_fn = sig->fn_index;   // codegen targets this directly
             e->as.call.cextern_index = sig->cextern_index;  // >=0 ⇒ a foreign C call → OP_CALL_C
+            e->as.call.extern_direct = sig->direct_extern;  // OFI-167: native direct-extern → direct C call
+            e->as.call.extern_cname  = sig->direct_extern ? sig->name : NULL;
             // LSP: hover/go-to-def on the called function's name.
             sem_record_fn(c, callee->line, callee->col, callee->as.ident, sig, NULL, NULL);
             SemType rt = check_fn_call(c, e, sig, expected);
@@ -6561,7 +6579,7 @@ static void check_stmt(Checker *c, Stmt *s) {
             if (sfi < 0) {
                 type_error(c, s->line, s->col,
                            "'spawn' requires a call to a named function");
-            } else if (c->fns[sfi].cextern_index >= 0) {
+            } else if (c->fns[sfi].cextern_index >= 0 || c->fns[sfi].direct_extern) {
                 type_error(c, s->line, s->col,
                            "cannot 'spawn' a foreign (extern \"c\") function");
             }
@@ -7391,6 +7409,7 @@ static void collect_signature(Checker *c, const FnDecl *fn) {
     }
     sig->ret = fn->return_type ? annotation_type(c, fn->return_type) : TY_UNIT;
     sig->cextern_index = -1;   // an ordinary Ember function (not a foreign C function)
+    sig->direct_extern = 0;    // OFI-167: not an extern at all
     leave_type_params(c);
 }
 
@@ -7438,6 +7457,52 @@ static int extern_flatten(Checker *c, SemType t, char *buf, int *n, int max) {
 }
 
 
+// collect_direct_extern registers an `extern "c"` function that is NOT in the hosted FFI registry
+// (OFI-167). The native backend emits a DIRECT call to this C symbol (linker-resolved against a
+// freestanding shim — the kernel/bare-metal path), so there is no registry index and no VM binding:
+// such a program is native-only. The boundary here is deliberately narrow — every parameter and the
+// return must be a scalar (i8..u64/f32/f64/bool) or an opaque `Ptr`. A `string`/buffer/struct
+// crossing needs the registry's leaf marshalling (the `em_ffi` wrapper), which a direct call has
+// no way to reassemble; those are rejected with a clear message rather than mis-compiled.
+static void collect_direct_extern(Checker *c, const FnDecl *fn) {
+    if (fn->generic_count != 0) {
+        type_error(c, fn->line, fn->col, "an extern function cannot be generic");
+    }
+    FnSig *sig = &c->fns[c->fn_count++];
+    sig->decl          = fn;   // for LSP hover/go-to-def on extern-function references
+    sig->name          = fn->name;
+    sig->generic_count = 0;
+    sig->module        = c->current_module;
+    sig->fn_index      = -1;   // no bytecode slot
+    sig->cextern_index = -1;   // not in the registry
+    sig->direct_extern = 1;    // native emits a direct call to sig->name
+    int declared = 0;
+    for (size_t p = 0; p < fn->param_count && declared < MAX_PARAMS; p++) {
+        SemType pt = annotation_type(c, fn->params[p].type);
+        OwnQual q  = fn->params[p].qual;
+        // A direct-extern parameter is passed by value with no marshalling, so only a bare scalar
+        // or a `Ptr` is allowed (a `move Ptr` handle keeps the linear consume semantics — the C
+        // side takes ownership). `self`, `mut`, and any non-scalar/non-Ptr type are rejected.
+        if (fn->params[p].is_self || (q == OWN_MUT) ||
+            (q == OWN_MOVE && pt != TY_PTR) ||
+            !(is_scalar_type(pt) || pt == TY_PTR)) {
+            type_error(c, fn->line, fn->col,
+                       "a direct extern parameter must be a scalar (i8..u64/f32/f64/bool) or a Ptr "
+                       "handle; a string/buffer/struct argument needs a registry FFI entry");
+        }
+        sig->quals[declared]    = q;
+        sig->params[declared++] = pt;
+    }
+    sig->param_count = declared;
+    sig->ret = fn->return_type ? annotation_type(c, fn->return_type) : TY_UNIT;
+    if (!(sig->ret == TY_UNIT || is_scalar_type(sig->ret) || sig->ret == TY_PTR)) {
+        type_error(c, fn->line, fn->col,
+                   "a direct extern must return a scalar, a Ptr, or nothing; a string/buffer/struct "
+                   "return needs a registry FFI entry");
+    }
+}
+
+
 // collect_extern registers the foreign (C) functions of an `extern "c"` block as call-able
 // signatures (FFI, §5h). Each must name a function in the in-tree C registry and match its
 // LEAF-scalar signature (scalars, or all-scalar structs flattened — 3b.6); it carries the
@@ -7461,10 +7526,9 @@ static void collect_extern(Checker *c, const Decl *d) {
         }
         int cx = cextern_lookup(fn->name);
         if (cx < 0) {
-            type_error(c, fn->line, fn->col,
-                       "unknown C function (the FFI exposes the libm scalar functions: "
-                       "sin, cos, tan, asin, acos, atan, atan2, exp, log, log2, log10, "
-                       "sinh, cosh, tanh, cbrt, trunc, hypot, fmod)");
+            // OFI-167: not a hosted-registry function → a native direct-extern (the kernel/bare-metal
+            // path). Register it so calls type-check; the native backend emits a direct C call.
+            collect_direct_extern(c, fn);
             continue;
         }
         if (fn->generic_count != 0) {
@@ -7478,6 +7542,7 @@ static void collect_extern(Checker *c, const Decl *d) {
         sig->module        = c->current_module;
         sig->fn_index      = -1;   // no bytecode slot
         sig->cextern_index = cx;
+        sig->direct_extern = 0;    // OFI-167: a registry (hosted-libc) extern, not a direct one
         // Resolve the declared signature and check it matches the C registry entry (arity +
         // scalar kinds). A scalar's "kind" is 'f' (float) or 'i' (int).
         int declared = 0;

@@ -1,10 +1,11 @@
-# Kernel / freestanding runtime — kickoff brief (PROPOSED)
+# Kernel / freestanding runtime — kickoff brief + milestone log
 
-> **Status: planning.** This is the seed for the dedicated kernel chat, written at the moment the
-> native C-emit **self-hosting reproduction fixed point** landed (2026-07-01). It lays out the plan and the
-> **design forks to confirm** — nothing here is decided; the first job in the kernel chat is to confirm the
-> target and scope with Karl, then build the smallest possible bare-metal spike. Per CLAUDE.md: discuss
-> design before implementing.
+> **Status: MILESTONE 1 ACHIEVED (2026-07-01).** A heap-free Ember `main` boots on QEMU `aarch64 virt`
+> and prints to the PL011 UART with **no libc and no heap** — "Hello from Ember!" over the wire, plus a
+> counted loop proving the integer runtime path runs on bare metal. Gated by `make test-kernel`. The
+> forks below were confirmed with Karl (aarch64 virt · Apple clang cross · UART-hello, hand-shim first);
+> the outcome + the three real discoveries are recorded in **"Milestone 1 — outcome"** at the end. The
+> original plan is kept as written for the record.
 
 ## Why now
 
@@ -95,3 +96,56 @@ after (allocator, interrupts, the no-alloc subset, a richer runtime) is incremen
   output), mirroring the differential discipline that carried self-hosting.
 - Freestanding codegen is a **new emit target**, not a rewrite — reuse the AST→C machinery; the delta is the
   preamble + entry + which runtime symbols exist.
+
+## Milestone 1 — outcome (2026-07-01): "Hello from Ember on bare metal" ✅
+
+`make test-kernel` boots `kernel/kernel.elf` on QEMU `aarch64 virt` and the PL011 UART prints:
+
+```
+Hello from Ember!
+...
+```
+
+emitted by the heap-free `kernel/hello.em` — a message written byte-by-byte through `uart_putc`, then a
+counted loop (the three dots) that exercises the integer runtime (`em_add`/`em_eq_op`/`em_truthy`) with no
+OS underneath. The pipeline: default `emberc --emit=c` → freestanding shim (`kernel/rt.c` + shadow
+`kernel/ember_rt.h`) → boot stub (`kernel/boot.S`) → linker script (`kernel/kernel.ld`) → QEMU. Opt-in
+(`make kernel` / `make test-kernel`); the default build stays dependency-free.
+
+### The three real discoveries (each changed the plan)
+
+1. **`extern "c"` couldn't reach bare metal at all → native direct-extern (OFI-167).** The FFI was a
+   *closed, index-keyed registry* of hosted libc/libm symbols — both the VM and the C-emit backend
+   dispatched every extern through `em_ffi(&g_em, <index>, …)`, so the C symbol name never reached the
+   output. There was no way to call a `uart_putc`. **Fix (the "real fix", chosen over a registry stopgap):**
+   an `extern "c"` fn NOT in the registry is a *direct extern* — the native backend forward-declares it with
+   its exact C type and emits a direct call to the named symbol (linker-resolved against `rt.c`); the VM
+   rejects it as native-only. Scalar/Ptr params + return for now (string/buffer/struct still need a registry
+   entry). This is the general mechanism the kernel needs: declare any driver helper and call it.
+2. **"Zero-install" needed one install: an ELF linker.** Apple clang *compiles* `aarch64-none-elf`
+   zero-install, but the default linker is Mach-O-only `ld64` — it can't link ELF or honour a linker script.
+   `brew install lld` (LLVM's own linker, same toolchain family) supplies `ld.lld`; the link uses
+   `--ld-path=$(command -v ld.lld)`. So the toolchain is **Apple clang cross + lld + qemu**, not purely
+   zero-install.
+3. **FP/SIMD must be enabled at EL1 before any non-trivial Ember runs.** The runtime's 16-byte `Value`
+   (its union holds a `double`) is copied by clang with **128-bit SIMD loads/stores**, but FP/SIMD access
+   *traps at reset*. The constant message bytes materialised into GP registers and printed; the loop's
+   runtime `Value` copies hit a `q`-register and took an "SIMD trapped" exception (ESR EC=0x7) into an empty
+   vector → hang. `boot.S` now sets `CPACR_EL1.FPEN = 0b11` before calling `main`. **Mandatory for any
+   bare-metal Ember target** — worth remembering as the runtime grows.
+
+### Files
+
+`kernel/hello.em` (source) · `kernel/rt.c` + `kernel/ember_rt.h` (freestanding shim — the exact `em_*`
+surface the heap-free subset references) · `kernel/boot.S` (aarch64 `_start`: park secondaries, enable
+FP/SIMD, set sp, call `main`, semihosting `SYS_EXIT`) · `kernel/kernel.ld` (load at `0x4008_0000`) ·
+`tests/run/error_direct_extern_vm.em` (the VM-rejection golden).
+
+### Next increments (post-hello)
+
+- A **`--freestanding` emit mode** in `cgen_c`/`main.c` so the C-emit path targets bare metal directly
+  (strip the `ember_rt.h` include, emit the entry contract) instead of shadowing the header by `-Ikernel`.
+- Map the **heap-free subset** precisely, then a **tiny freestanding runtime** (a bump allocator over a
+  `.bss` arena, no stdio) to unlock strings/arrays/structs on bare metal.
+- An **exception vector table** (so a fault is diagnosable, not a silent hang), then MMIO/asm intrinsics
+  (volatile load/store — retires the `extern "c"` shim for hardware access), a timer, interrupts.

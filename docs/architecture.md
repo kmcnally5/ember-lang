@@ -1688,3 +1688,43 @@ against. The decisions:
   trap; keeping a from-C reference (and the tag that pins it) is what guarantees the project can always
   re-bootstrap. The eventual reproducibility fixed point (stage-1 output ≡ stage-2 output, the
   *Trusting Trust* construction) is stated as a property to demonstrate, not a security claim.
+
+
+## Decision: `extern "c"` has two mechanisms — a hosted registry (VM + native) and a native-only direct-extern (bare metal)
+
+The FFI (MANIFESTO §5h) began as a single mechanism: a **closed, in-tree registry** (`src/cextern.c`
+`g_sigs`/`g_fns`) of hand-written typed wrappers, dispatched **by index**. The checker resolves an
+`extern "c"` name to a registry index; both backends carry only that index (the VM runs `OP_CALL_C`, the
+C-emit backend writes `em_ffi(&g_em, <index>, …)`). The C symbol *name* never appears in the output. This
+is right for the VM — the interpreter can't call an arbitrary C symbol, it needs a function pointer in a
+table — and it keeps the ABI marshalling (leaf flattening, struct-by-value reassembly, copy-on-return
+strings) in one audited place.
+
+But it cannot express **bare-metal C**: a kernel MMIO helper (`uart_putc`), a driver entry point, anything
+outside the curated list. The registry is structurally hosted-libc-shaped, and the kernel campaign needs to
+call *any* C symbol a freestanding shim provides. Surfaced on the first bare-metal spike (OFI-167).
+
+The decision — **add a second mechanism rather than widen the registry** (chosen over the cheaper stopgap of
+adding kernel symbols to the registry, which would pollute the hosted table with board-specific MMIO
+addresses and need a compiler edit per helper):
+
+- An `extern "c"` function **not** found by `cextern_lookup` is a **direct extern** (`FnSig.direct_extern`),
+  not an error. The checker (`collect_direct_extern`) registers its signature so calls type-check; params
+  and return are restricted to **scalars and `Ptr`** (a string/buffer/struct crossing still needs the
+  registry's marshalling — a direct call has no way to reassemble it, so it is rejected with a clear
+  message, not mis-compiled).
+- The **native backend** forward-declares each direct extern with its **exact C type**
+  (`ember_ctype_of`: `i32`→`int32_t`, `f64`→`double`, `Ptr`→`void *`, unit→`void`) and emits a **direct call
+  to the named symbol** (`emit_direct_extern_call` — unbox each arg from its `Value`, re-box the C result),
+  which the linker resolves against the freestanding shim. Matching the prototype to the shim's definition
+  keeps the ABI well-defined (no UB).
+- The **VM** has no binding for such a symbol, so codegen rejects a direct-extern call with a clear
+  "no bytecode-VM binding; build native" error. **A direct-extern program is native-only** — it can only be
+  built with `emberc --emit=c` / `-o`, never run on the VM or through the VM↔native differential. This is an
+  accepted consequence: kernel code is native by definition.
+
+So the registry stays the canonical, VM-runnable, fully-marshalled path for hosted libraries (libm, the
+`std/*` FFI bindings, libcurl, SQLite); direct-extern is the narrow, native-only, scalar/Ptr path for
+bare-metal and any freestanding C. MMIO **intrinsics** (volatile load/store, no C shim at all) remain the
+eventual endgame that retires even the direct-extern shim for hardware access. First used by kernel
+milestone 1 (`make test-kernel`); see [docs/design/kernel-freestanding.md](https://github.com/kmcnally5/ember-lang/blob/main/docs/design/kernel-freestanding.md).

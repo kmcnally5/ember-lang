@@ -5,6 +5,8 @@
 # `make release`   builds an optimized compiler at build/emberc-release (-O2)
 # `make parallel`  builds the multicore compiler at build/emberc-par (-O2, M:N)
 # `make graphics`  builds the graphics compiler at build/emberc-gfx (-O2, raylib)
+# `make kernel`    builds the bare-metal aarch64 image kernel/kernel.elf (OFI-167; needs LLVM cross + qemu)
+# `make test-kernel` boots kernel.elf on QEMU aarch64 virt and checks the UART output
 # `make bench`     builds release, then runs + times every benchmarks/*.em
 # `make parbench`  builds serial + parallel, runs the parallel speedup comparison
 # `make clean`     removes all build artifacts
@@ -81,6 +83,17 @@ MN_NETGFX_FLAGS := -std=c17 -Wall -Wextra -Iinclude -O2 -DNDEBUG -DEMBER_NET=1 -
 GRAPHICS_BIN   := build/emberc-gfx
 GRAPHICS_FLAGS := -std=c17 -Wall -Wextra -Iinclude -O2 -DNDEBUG -DEMBER_GRAPHICS=1 $(PORTABLE_DEFS)
 
+# Bare-metal kernel target (OFI-167 / kernel milestone 1): a freestanding aarch64 image booted under
+# QEMU `virt`. Opt-in — needs the LLVM cross toolchain (Apple clang cross-compiles aarch64-none-elf;
+# the ELF link needs ld.lld) + qemu; the DEFAULT build stays dependency-free and never touches these.
+# The default `emberc` emits the C (`--emit=c`); clang cross-compiles it + the freestanding shim
+# (kernel/rt.c) against the boot stub (kernel/boot.S) and linker script (kernel/kernel.ld).
+KERNEL_CC       ?= clang
+KERNEL_TARGET   := aarch64-none-elf
+KERNEL_CC_FLAGS := -target $(KERNEL_TARGET) -ffreestanding -nostdlib
+KERNEL_LLD      := $(shell command -v ld.lld 2>/dev/null || echo /opt/homebrew/opt/lld/bin/ld.lld)
+KERNEL_ELF      := kernel/kernel.elf
+
 # Networking build: -DEMBER_NET=1 links libcurl and registers the http_post FFI wrapper (HTTPS).
 # Opt-in only — the default build stays dependency-free, so `make` / `make test` never need
 # libcurl. libcurl's headers aren't held to our -Werror, so this build uses -Wall -Wextra only.
@@ -129,7 +142,7 @@ DEPS    := $(OBJECTS:.o=.d)
 GEN_BIN := build/gen_editor_assets
 GRAMMAR := editors/vscode/syntaxes/ember.tmLanguage.json
 
-.PHONY: all test test-update test-lsp doctor help release asan asan-par asan-trace install install-vscode build-zed install-zed parallel mn tsan-mn asan-mn mn-stress mn-graphics mn-net-graphics graphics net net-graphics db test-db test-graphics test-net test-parallel selfhost crucible ceilings ledger opcheck verify docs string-diff bench parbench gen-editor-assets check-editor-sync clean
+.PHONY: all test test-update test-lsp doctor help release asan asan-par asan-trace install install-vscode build-zed install-zed parallel mn tsan-mn asan-mn mn-stress mn-graphics mn-net-graphics graphics net net-graphics db test-db test-graphics test-net test-parallel kernel test-kernel selfhost crucible ceilings ledger opcheck verify docs string-diff bench parbench gen-editor-assets check-editor-sync clean
 
 all: $(BIN) $(RT_LIB) $(RT_LIB_PAR)
 
@@ -377,6 +390,23 @@ db: $(SQLITE_OBJ) | build
 # dependency-free `make test`; each case runs against a scratch DB under the system temp dir.
 test-db: db
 	@tests/run-db.sh
+
+# Bare-metal kernel image (OFI-167 / kernel milestone 1). Uses the DEFAULT emberc to emit C from the
+# heap-free Ember program, then cross-compiles it + the freestanding shim against the boot stub and
+# linker script into a flat aarch64 ELF for QEMU `virt`. Opt-in (LLVM cross toolchain + qemu).
+kernel: $(BIN)
+	$(BIN) --emit=c kernel/hello.em > kernel/hello.c
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) -c kernel/boot.S -o kernel/boot.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) -Ikernel -c kernel/hello.c -o kernel/hello.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) -Ikernel -c kernel/rt.c -o kernel/rt.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) --ld-path=$(KERNEL_LLD) -T kernel/kernel.ld \
+		kernel/boot.o kernel/hello.o kernel/rt.o -o $(KERNEL_ELF)
+	@echo "Built $(KERNEL_ELF).  Boot it:  make test-kernel"
+
+# Kernel QEMU smoke test — boots kernel.elf on aarch64 virt and greps the UART output. Kept OUT of
+# the dependency-free `make test` (needs the cross toolchain + qemu), like test-graphics / test-db.
+test-kernel: kernel
+	@tests/run-kernel.sh
 
 # Graphics/UI regression suite (needs the raylib build + a display, so it's separate
 # from the dependency-free `make test`). Builds the graphics compiler first.

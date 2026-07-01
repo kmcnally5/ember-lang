@@ -74,6 +74,11 @@ typedef struct {
     const CgcStructNames *snames;
     const FnDecl        **fn_by_fi;        // function-table slot -> FnDecl (for method self typing)
     int                   total_functions;
+    // OFI-167: `extern "c"` functions NOT in the hosted FFI registry — the native backend forward-
+    // declares each and emits a DIRECT call to its C symbol (linker-resolved against a freestanding
+    // shim), instead of the registry trampoline `em_ffi`. Populated from the AST's extern blocks.
+    const FnDecl        **direct_externs;
+    int                   direct_extern_count;
     // Per fn slot: the OWNING struct's generic params (NULL/0 for a free fn), so a method's
     // param/return type named after the struct's type parameter (Box<T>'s `T`) is recognised as
     // ERASED, not resolved to a same-named user struct — the checker makes the same scope
@@ -1013,6 +1018,101 @@ static int cgc_is_numeric_typename(const char *n) {
 
 
 
+// OFI-167 (native direct-extern): the exact C type a direct-extern parameter/return crosses as. The
+// boundary is scalar-or-Ptr (the checker's collect_direct_extern enforces it), so each maps to a
+// fixed-width C type and the emitted forward declaration matches the freestanding shim's definition
+// byte-for-byte — no prototype/definition mismatch, no UB. A NULL type is the unit return -> `void`.
+static const char *ember_ctype_of(const Type *t) {
+    if (t == NULL) {
+        return "void";
+    }
+    if (t->kind != TYPE_NAME || t->as.name.qualifier != NULL) {
+        return NULL;
+    }
+    const char *n = t->as.name.name;
+    if (strcmp(n, "i8")  == 0) { return "int8_t"; }
+    if (strcmp(n, "i16") == 0) { return "int16_t"; }
+    if (strcmp(n, "i32") == 0) { return "int32_t"; }
+    if (strcmp(n, "i64") == 0 || strcmp(n, "int") == 0) { return "int64_t"; }
+    if (strcmp(n, "u8")  == 0) { return "uint8_t"; }
+    if (strcmp(n, "u16") == 0) { return "uint16_t"; }
+    if (strcmp(n, "u32") == 0) { return "uint32_t"; }
+    if (strcmp(n, "u64") == 0) { return "uint64_t"; }
+    if (strcmp(n, "f32") == 0) { return "float"; }
+    if (strcmp(n, "f64") == 0) { return "double"; }
+    if (strcmp(n, "bool") == 0) { return "int"; }        // Ember bool crosses as a 0/1 int
+    if (strcmp(n, "Ptr")  == 0) { return "void *"; }
+    return NULL;
+}
+
+
+// A direct-extern type crosses as a float (AS_FLOAT / FLOAT_VAL) rather than an integer/Ptr.
+static int direct_type_is_float(const Type *t) {
+    return t != NULL && t->kind == TYPE_NAME && t->as.name.qualifier == NULL &&
+           (strcmp(t->as.name.name, "f32") == 0 || strcmp(t->as.name.name, "f64") == 0);
+}
+
+
+// A direct-extern type crosses as an opaque Ptr (a C pointer carried in the Value int64 slot).
+static int direct_type_is_ptr(const Type *t) {
+    return t != NULL && t->kind == TYPE_NAME && t->as.name.qualifier == NULL &&
+           strcmp(t->as.name.name, "Ptr") == 0;
+}
+
+
+// The FnDecl of the direct-extern named `name` (registered in the preamble pass), or NULL.
+static const FnDecl *find_direct_extern(CgcGen *g, const char *name) {
+    for (int i = 0; i < g->direct_extern_count; i++) {
+        if (strcmp(g->direct_externs[i]->name, name) == 0) {
+            return g->direct_externs[i];
+        }
+    }
+    return NULL;
+}
+
+
+// OFI-167: emit a native DIRECT call to an `extern "c"` symbol not in the hosted registry (a kernel
+// MMIO helper, say). Each argument is unboxed from its Value to the C scalar/Ptr the forward
+// declaration expects; the C result is re-boxed into a Value. A unit-returning extern is called for
+// effect and yields INT_VAL(0), so the call is still a Value expression like every other.
+static void emit_direct_extern_call(CgcGen *g, const Expr *e) {
+    const char   *cname = e->as.call.extern_cname;
+    const FnDecl *fn    = find_direct_extern(g, cname);
+    if (fn == NULL) {
+        cgc_error(g, e->line, "internal: no direct-extern declaration for '%s'", cname);
+        return;
+    }
+    const Type *rt      = fn->return_type;
+    int         ret_unit = (rt == NULL);
+    if (ret_unit) {
+        fputc('(', g->out);                              // (call(...), INT_VAL(0))
+    } else if (direct_type_is_float(rt)) {
+        fputs("FLOAT_VAL((double)", g->out);
+    } else if (direct_type_is_ptr(rt)) {
+        fputs("INT_VAL((int64_t)(intptr_t)", g->out);
+    } else {
+        fputs("INT_VAL((int64_t)", g->out);
+    }
+    fprintf(g->out, "%s(", cname);
+    size_t argc = e->as.call.arg_count;
+    for (size_t i = 0; i < argc; i++) {
+        if (i > 0) { fputs(", ", g->out); }
+        const Type *pt = (i < fn->param_count) ? fn->params[i].type : NULL;
+        if (direct_type_is_float(pt)) {
+            fputs("AS_FLOAT(", g->out);
+        } else if (direct_type_is_ptr(pt)) {
+            fputs("(void *)(intptr_t)AS_INT(", g->out);
+        } else {
+            fputs("AS_INT(", g->out);
+        }
+        emit_expr(g, e->as.call.args[i]);
+        fputc(')', g->out);
+    }
+    fputc(')', g->out);                                  // close the C call's argument list
+    fputs(ret_unit ? ", INT_VAL(0))" : ")", g->out);     // close the (…,INT_VAL(0)) or the box macro
+}
+
+
 // emit_ffi_call — an `extern "c"` FFI call (M5). The arguments are pushed as their flattened
 // scalar LEAVES into a Value[] for em_ffi, which dispatches through the in-tree C registry
 // (cextern_call) and reassembles a scalar or struct result. Single-leaf args only (scalar,
@@ -1205,6 +1305,10 @@ static void emit_call(CgcGen *g, const Expr *e) {
             emit_value_arg(g, e->as.call.args[i]);
         }
         fputc(')', g->out);
+        return;
+    }
+    if (e->as.call.extern_direct) {          // OFI-167: direct call to a non-registry C symbol
+        emit_direct_extern_call(g, e);
         return;
     }
     if (e->as.call.cextern_index >= 0) {
@@ -3419,6 +3523,41 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
     }
     fputs(concurrent ? "_Thread_local EmberRt g_em;\n\n" : "static EmberRt g_em;\n\n", out);
 
+    // OFI-167: collect the DIRECT externs (extern "c" fns not in the hosted FFI registry) from the
+    // AST's extern blocks, so the preamble can forward-declare each and calls emit a direct C call.
+    int direct_extern_count = 0;
+    for (size_t i = 0; i < ast->count; i++) {
+        const Decl *d = ast->decls[i];
+        if (d->kind != DECL_EXTERN) {
+            continue;
+        }
+        for (size_t k = 0; k < d->as.extern_.fn_count; k++) {
+            if (cextern_lookup(d->as.extern_.fns[k].name) < 0) {
+                direct_extern_count++;
+            }
+        }
+    }
+    const FnDecl **direct_externs = NULL;
+    if (direct_extern_count > 0) {
+        direct_externs = malloc((size_t)direct_extern_count * sizeof *direct_externs);
+        if (direct_externs == NULL) {
+            fprintf(stderr, "emberc: out of memory\n");
+            exit(70);
+        }
+        int di = 0;
+        for (size_t i = 0; i < ast->count; i++) {
+            const Decl *d = ast->decls[i];
+            if (d->kind != DECL_EXTERN) {
+                continue;
+            }
+            for (size_t k = 0; k < d->as.extern_.fn_count; k++) {
+                if (cextern_lookup(d->as.extern_.fns[k].name) < 0) {
+                    direct_externs[di++] = &d->as.extern_.fns[k];
+                }
+            }
+        }
+    }
+
     CgcGen g;
     g.out             = out;
     g.src_name        = source_name;
@@ -3439,6 +3578,42 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
     g.variant_count   = total_variants;
     g.concurrent      = concurrent;
     g.nursery_depth   = 0;
+    g.direct_externs      = direct_externs;
+    g.direct_extern_count = direct_extern_count;
+
+    // OFI-167: forward-declare each direct extern with its EXACT C signature, so the emitted calls
+    // link against the freestanding shim (or any C TU) that defines the symbol. `-Werror` requires a
+    // prototype; matching the shim's definition byte-for-byte keeps the ABI well-defined (no UB).
+    for (int i = 0; i < direct_extern_count; i++) {
+        const FnDecl *fx  = direct_externs[i];
+        const char   *crt = ember_ctype_of(fx->return_type);
+        if (crt == NULL) {
+            cgc_error(&g, fx->line,
+                      "direct extern '%s' has an unsupported return type (scalar or Ptr only)",
+                      fx->name);
+            crt = "void";
+        }
+        fprintf(out, "extern %s %s(", crt, fx->name);
+        if (fx->param_count == 0) {
+            fputs("void", out);
+        } else {
+            for (size_t p = 0; p < fx->param_count; p++) {
+                if (p > 0) { fputs(", ", out); }
+                const char *cpt = ember_ctype_of(fx->params[p].type);
+                if (cpt == NULL) {
+                    cgc_error(&g, fx->line,
+                              "direct extern '%s' parameter %zu has an unsupported type "
+                              "(scalar or Ptr only)", fx->name, p + 1);
+                    cpt = "int64_t";
+                }
+                fputs(cpt, out);
+            }
+        }
+        fputs(");\n", out);
+    }
+    if (direct_extern_count > 0) {
+        fputc('\n', out);
+    }
 
     for (int s = 0; s < total_functions; s++) {
         fputs("static ", out);
@@ -3600,6 +3775,7 @@ int cgen_c_program(const Program *ast, const ModuleSet *modules,
     free(fn_owner_sid);
     free(owner_generics);
     free(owner_generic_ct);
+    free(direct_externs);   // OFI-167
     free(g.scope);
     return g.had_error;
 }

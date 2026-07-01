@@ -716,6 +716,76 @@ fn build_struct_tab(decls: [ps.Decl]) -> StructTab {
 }
 
 
+// ---- the enum table (enums are BOXED runtime values `em_enum(enum_id, tag, fcount, fields…)` — no C type
+// and no metadata preamble; the table just resolves a variant NAME to its enum id + tag + payload arity,
+// computed from the DEnum decls, mirroring codegen.em's build_enums). ----------------------------------
+struct EnumTab {
+    names: [string]            // enum id -> name (declaration order)
+    v_owner: [int]             // flat variant table -> owning enum id
+    v_name: [string]           // ...variant name
+    v_tag: [int]               // ...tag (index within its enum)
+    v_arity: [int]             // ...payload field count
+
+
+    // variant_flat returns the flat-table index of variant `name` (-1 if `name` is not a known variant).
+    fn variant_flat(self, name: string) -> int {
+        var i = 0
+        loop {
+            if i >= self.v_name.len() {
+                break
+            }
+            if self.v_name[i] == name {
+                return i
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+
+
+    fn is_variant(self, name: string) -> bool {
+        return self.variant_flat(name) >= 0
+    }
+}
+
+
+// build_enum_tab collects every enum's variants from the AST (enum ids + per-enum variant tags).
+fn build_enum_tab(decls: [ps.Decl]) -> EnumTab {
+    var names: [string] = []
+    var vo: [int] = []
+    var vn: [string] = []
+    var vt: [int] = []
+    var va: [int] = []
+    var i = 0
+    loop {
+        if i >= decls.len() {
+            break
+        }
+        match decls[i] {
+            case DEnum(name, generics, impls, variants) {
+                let id = names.len()
+                names.append(name)
+                var vi = 0
+                loop {
+                    if vi >= variants.len() {
+                        break
+                    }
+                    vo.append(id)
+                    vn.append(variants[vi].name)
+                    vt.append(vi)
+                    va.append(variants[vi].fields.len())
+                    vi = vi + 1
+                }
+            }
+            case _ {
+            }
+        }
+        i = i + 1
+    }
+    return EnumTab { names: names, v_owner: vo, v_name: vn, v_tag: vt, v_arity: va }
+}
+
+
 // build_fn_ret_structs is the VALUE-struct sid each body-bearing fn returns (parallel to build_fn_names),
 // so a `let p = mk()` of a struct-returning call is typed / stored as the C em_s aggregate.
 fn build_fn_ret_structs(decls: [ps.Decl], stab: StructTab) -> [int] {
@@ -752,6 +822,42 @@ fn build_fn_ret_structs(decls: [ps.Decl], stab: StructTab) -> [int] {
 }
 
 
+// build_fn_ret_enum marks each body-bearing fn (parallel to build_fn_names) that returns an ENUM type, so a
+// `let o = f()` of an enum-returning call is tracked as an OWNED (droppable, move-into-call) binding.
+fn build_fn_ret_enum(decls: [ps.Decl], en: EnumTab) -> [bool] {
+    var out: [bool] = []
+    var i = 0
+    loop {
+        if i >= decls.len() {
+            break
+        }
+        match decls[i] {
+            case DFn(f) {
+                if f.has_body {
+                    out.append(f.ret.len() > 0 && is_enum_ty(f.ret[0], en))
+                }
+            }
+            case DStruct(name, generics, impls, fields, methods, kind) {
+                var mi = 0
+                loop {
+                    if mi >= methods.len() {
+                        break
+                    }
+                    if methods[mi].has_body {
+                        out.append(methods[mi].ret.len() > 0 && is_enum_ty(methods[mi].ret[0], en))
+                    }
+                    mi = mi + 1
+                }
+            }
+            case _ {
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+
 // ---- the C-emit generator state (mirrors src/cgen_c.c's CgcGen) -------------------------------------
 // next_var is the per-function `v%d` temp counter (retain temps + scalar `let` bindings share it). The
 // scope maps an in-scope binding NAME to its C expression (`a0` for a param, `v3` for a `let`) and its
@@ -770,12 +876,14 @@ struct CgcGen {
     sc_struct: [int]           // ...for a VALUE-STRUCT binding: its struct sid (so `p.f` / storage type resolve), else -1
     indent: int                // current C indentation depth (1 = the function-body level, 4 spaces each)
     st: StructTab              // the declared-struct table (value/boxed classification + field resolution)
+    en: EnumTab                // the declared-enum table (variant -> enum id / tag / payload arity)
     fn_names: [string]         // every body-bearing fn in em_fn_N order (free fns + `Struct.method`)
     fn_ret_kind: [int]         // ...each fn's return width-kind (for a `let x = f()` scalar binding)
     fn_ret_str: [bool]         // ...does each fn return a string (a `let x = f()` owned binding)?
     fn_ret_array: [bool]       // ...does each fn return an array (a `let x = f()` owned array binding)?
     fn_ret_elem_kind: [int]    // ...for an array-returning fn: its element scalar kind (so `f()[i]` is a scalar), else -1
     fn_ret_struct: [int]       // ...for a value-struct-returning fn: the struct sid (so `let p = f()` is an em_s), else -1
+    fn_ret_enum: [bool]        // ...does each fn return an enum (a `let o = f()` OWNED refcounted binding)?
 
 
     fn fresh_var(mut self) -> int {
@@ -1013,6 +1121,10 @@ struct CgcGen {
                 return "INT_VAL(0)"
             }
             case EIdent(name) {
+                if self.en.is_variant(name) && self.lookup_cname(name) == "" {
+                    var no_args: [ps.Expr] = []
+                    return self.emit_enum_ctor(name, no_args)   // a bare (zero-payload) enum variant `Dot`
+                }
                 let cn = self.lookup_cname(name)
                 if self.lookup_unboxed(name) {
                     return "INT_VAL((int64_t){cn})"      // an unboxed scalar `let` boxes back to a Value
@@ -1185,6 +1297,57 @@ struct CgcGen {
     }
 
 
+    // emit_enum_ctor renders an enum-variant construction (a bare `Dot` or a payload `Circle(4)`) →
+    // `em_enum(&g_em, <enum_id>, <tag>, <arity>, payload…)`. The payload values are emitted in source order
+    // (a left-to-right loop — OFI-166). A fresh em_enum is an OWNED refcounted value.
+    fn emit_enum_ctor(mut self, name: string, args: [ps.Expr]) -> string {
+        let flat = self.en.variant_flat(name)
+        let eid = self.en.v_owner[flat]
+        let tag = self.en.v_tag[flat]
+        let arity = self.en.v_arity[flat]
+        var s = "em_enum(&g_em, {eid}, {tag}, {arity}"
+        var i = 0
+        loop {
+            if i >= args.len() {
+                break
+            }
+            s = s + ", " + self.emit_expr(args[i])      // a scalar payload (owned payloads: a later increment)
+            i = i + 1
+        }
+        return s + ")"
+    }
+
+
+    // is_enum_expr reports whether an expression CONSTRUCTS an enum value (a bare variant, or a variant with
+    // payload) — an OWNED refcounted value, dropped at scope exit / moved into a call like a string.
+    fn is_enum_expr(self, e: ps.Expr) -> bool {
+        match e {
+            case EIdent(name) {
+                return self.en.is_variant(name) && self.lookup_cname(name) == ""
+            }
+            case ECall(callee, args) {
+                match callee.value {
+                    case EIdent(name) {
+                        if self.en.is_variant(name) {
+                            return true                       // a payload variant construction `Circle(4)`
+                        }
+                        let fi = self.fn_index(name)
+                        if fi >= 0 {
+                            return self.fn_ret_enum[fi]       // an enum-returning free-function call `wrap(7)`
+                        }
+                    }
+                    case _ {
+                    }
+                }
+                return false
+            }
+            case _ {
+                return false
+            }
+        }
+    }
+
+
     // emit_str renders a string literal. A single literal run (no interpolation) is an interned, cached
     // `em_str` via a function-local static, retained on read (cgen_c.c). Interpolation (holes) is deferred.
     fn emit_str(mut self, parts: [ps.StrPart]) -> string {
@@ -1353,6 +1516,9 @@ struct CgcGen {
     fn emit_call(mut self, callee: ps.Expr, args: [ps.Expr]) -> string {
         match callee {
             case EIdent(name) {
+                if self.en.is_variant(name) {
+                    return self.emit_enum_ctor(name, args)   // an enum-variant construction `Circle(4)`
+                }
                 let fi = self.fn_index(name)
                 if fi >= 0 {
                     // If any argument is an owning temporary (an array literal), hoist EVERY argument into a
@@ -1838,7 +2004,7 @@ struct CgcGen {
                     self.push(name, "v{id}", kind, true, false, false, 0 - 1)        // unboxed C scalar storage
                 } else {
                     let arr = self.is_array_expr(value.value)
-                    let owned = self.is_string_expr(value.value) || arr      // string OR array local is owned/dropped
+                    let owned = self.is_string_expr(value.value) || arr || self.is_enum_expr(value.value)   // string / array / enum local is owned/dropped
                     // An owned array local carries its ELEMENT scalar kind so a later `xs[i]` types as a scalar —
                     // from the `[T]` annotation if present, else inferred from the initialiser.
                     var elem_sk = 0 - 1
@@ -1959,6 +2125,62 @@ struct CgcGen {
                 println("{self.ind()}\{")
                 self.indent = self.indent + 1
                 self.emit_block_stmts(body)
+                self.indent = self.indent - 1
+                println("{self.ind()}\}")
+            }
+            case SMatch(value, cases) {
+                // `match scrut { case V(binds) { … } … }` → evaluate the scrutinee once (a borrow of the owner),
+                // read its tag, then an if / else-if chain on the variant tag. A case's payload fields are bound
+                // POSITIONALLY via em_enum_field (a borrow — the enum owns them); a `case _` is the `else`.
+                // (cgen_c.c match lowering. Scrutinee-is-an-owning-temp drop is a later increment.)
+                let sv = self.fresh_var()
+                let tv = self.fresh_var()
+                println("{self.ind()}\{")
+                self.indent = self.indent + 1
+                println("{self.ind()}Value v{sv} = {self.emit_expr(value.value)};")
+                println("{self.ind()}int v{tv} = em_tag(v{sv});")
+                var ci = 0
+                var first = true
+                loop {
+                    if ci >= cases.len() {
+                        break
+                    }
+                    if cases[ci].pattern.wildcard {
+                        if first {
+                            println("{self.ind()}if (1) \{")
+                        } else {
+                            println("{self.ind()}\} else \{")
+                        }
+                    } else {
+                        let tag = self.en.v_tag[self.en.variant_flat(cases[ci].pattern.variant)]
+                        if first {
+                            println("{self.ind()}if (v{tv} == {tag}) \{")
+                        } else {
+                            println("{self.ind()}\} else if (v{tv} == {tag}) \{")
+                        }
+                    }
+                    self.indent = self.indent + 1
+                    let mark = self.sc_name.len()
+                    var bi = 0
+                    loop {
+                        if bi >= cases[ci].pattern.bindings.len() {
+                            break
+                        }
+                        let bv = self.fresh_var()
+                        println("{self.ind()}Value v{bv} = em_enum_field(&g_em, v{sv}, {bi});")
+                        self.push(cases[ci].pattern.bindings[bi], "v{bv}", 0 - 1, false, false, false, 0 - 1)   // a borrowed payload field
+                        bi = bi + 1
+                    }
+                    self.emit_block_raw(cases[ci].body)
+                    self.emit_drops(mark)
+                    self.truncate_scope(mark)
+                    self.indent = self.indent - 1
+                    first = false
+                    ci = ci + 1
+                }
+                if first == false {
+                    println("{self.ind()}\}")
+                }
                 self.indent = self.indent - 1
                 println("{self.ind()}\}")
             }
@@ -2104,8 +2326,35 @@ fn is_string_ty(ty: ps.Ty) -> bool {
 }
 
 
-fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: StructTab, fn_names: [string], fn_ret_kind: [int], fn_ret_str: [bool], fn_ret_array: [bool], fn_ret_elem_kind: [int], fn_ret_struct: [int]) {
-    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_struct: [], indent: 1, st: st, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_struct: fn_ret_struct }
+// is_enum_ty reports whether a type annotation names a declared enum (an OWNED refcounted value — an enum
+// param / local / return is dropped at scope exit and moved into a call, exactly like a string).
+fn is_enum_ty(ty: ps.Ty, en: EnumTab) -> bool {
+    match ty {
+        case TyName(qual, name) {
+            if qual != "" {
+                return false
+            }
+            var i = 0
+            loop {
+                if i >= en.names.len() {
+                    break
+                }
+                if en.names[i] == name {
+                    return true
+                }
+                i = i + 1
+            }
+            return false
+        }
+        case _ {
+            return false
+        }
+    }
+}
+
+
+fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: StructTab, en: EnumTab, fn_names: [string], fn_ret_kind: [int], fn_ret_str: [bool], fn_ret_array: [bool], fn_ret_elem_kind: [int], fn_ret_struct: [int], fn_ret_enum: [bool]) {
+    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_struct: [], indent: 1, st: st, en: en, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_struct: fn_ret_struct, fn_ret_enum: fn_ret_enum }
     var ai = 0
     if has_self {
         g.push("self", "a0", 0 - 1, false, false, false, 0 - 1)
@@ -2129,7 +2378,7 @@ fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: Stru
             var psid = 0 - 1
             if f.params[p].ty.len() > 0 {
                 pk = ty_scalar_kind(f.params[p].ty[0])
-                owned = is_string_ty(f.params[p].ty[0])
+                owned = is_string_ty(f.params[p].ty[0]) || is_enum_ty(f.params[p].ty[0], en)   // string / enum param is OWNED
                 is_arr = is_array_ty(f.params[p].ty[0])   // an array param is a BORROW (not dropped at exit)
                 if is_arr {
                     ek = ty_scalar_kind(elem_ty_of(f.params[p].ty[0]))   // its element scalar kind, so `a[i]` is a scalar
@@ -2444,7 +2693,9 @@ fn emit_program(decls: [ps.Decl], filename: string) {
     let fn_ret_array = build_fn_ret_array(decls)
     let fn_ret_elem_kind = build_fn_ret_elem_kinds(decls)
     let stab = build_struct_tab(decls)
+    let etab = build_enum_tab(decls)
     let fn_ret_struct = build_fn_ret_structs(decls, stab)
+    let fn_ret_enum = build_fn_ret_enum(decls, etab)
     println("// Generated by `emberc --emit=c` from {filename}. Do not edit.")
     println("// The bytecode VM is the reference semantics; tests/native diffs the two.")
     println("#include \"ember_rt.h\"")
@@ -2538,7 +2789,7 @@ fn emit_program(decls: [ps.Decl], filename: string) {
         match decls[k] {
             case DFn(f) {
                 if f.has_body {
-                    emit_fn_body(f, b, false, 0 - 1, stab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct)
+                    emit_fn_body(f, b, false, 0 - 1, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct, fn_ret_enum)
                     b = b + 1
                     if b < total {
                         println("")
@@ -2553,7 +2804,7 @@ fn emit_program(decls: [ps.Decl], filename: string) {
                         break
                     }
                     if methods[mi].has_body {
-                        emit_fn_body(methods[mi], b, true, owner, stab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct)
+                        emit_fn_body(methods[mi], b, true, owner, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct, fn_ret_enum)
                         b = b + 1
                         if b < total {
                             println("")

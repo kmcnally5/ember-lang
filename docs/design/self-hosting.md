@@ -674,9 +674,20 @@ The VM fixed point is reached and the M3b ownership dataflow has shipped, so the
    name); a method's `self` is the borrowed receiver, so a `self.field` read in a CONSUMING op is retained
    while a by-value param / let field (an owned copy) is not; the implicit trailing return of a struct-
    returning fn is `(em_s<sid>){0}`. Deferred within M5e.1: chained / call-result method receivers (a struct
-   TEMP receiver needs materialisation into an em_s temp), field WRITE (`p.f = v`), and mut/move self. Then
-   **M5e.2** BOXED structs (`em_struct` / `em_enum_field` / `em_set_field` + the drop discipline), then
-   bridges/nesting. Orthogonal follow-up: float-literal emission needs a `%.17g` builtin
+   TEMP receiver needs materialisation into an em_s temp), field WRITE (`p.f = v`), and mut/move self.
+   **M5f — enums + match** is done (fixture `enums_match.em`), the highest-leverage piece (the compiler's own
+   AST is enums, ~800 `case` sites across the modules): an enum value is a BOXED refcounted runtime value with
+   NO C type and NO metadata preamble — a variant construction is `em_enum(&g_em, <enum_id>, <tag>, <arity>,
+   payload…)` (bare `Dot` or payload `Circle(4)`); an enum param / local / return is OWNED (dropped at scope
+   exit, moved into a call via own_into_slot, like a string — tracked via is_enum_ty / is_enum_expr /
+   fn_ret_enum). A `match scrut { case V(binds) { … } }` statement reads the scrutinee's tag (`em_tag`) and
+   lowers to an if / else-if chain on the tag, binding payload fields POSITIONALLY via `em_enum_field`
+   (borrows); `case _` is the trailing `else`. Covers bare + scalar + string + multi-field variants,
+   wildcard, match-assigns-var, and nested match. Deferred in M5f: owned-payload USE (a string/enum payload
+   flowing out of a case), generic enums (Option/Result — tied to generics/prelude), and an owning-temp
+   scrutinee. Then **M5e.2** BOXED structs (`em_struct` / `em_enum_field` / `em_set_field` + the drop
+   discipline) — after which the LEXER should be the first real module to self-compile via cgen_c.em. Then
+   bridges/nesting + generics. Orthogonal follow-up: float-literal emission needs a `%.17g` builtin
    (Ember interpolation is `%g`, so `FLOAT_VAL` can't be produced from a bare `{f}`). OFI-166 (the C
    operand-eval-order discipline — sequence side-effecting subexpressions into ordered statements; gcc
    evaluates a binop/call's operands right-to-left where clang/the VM go left-to-right) is observed

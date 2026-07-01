@@ -733,10 +733,18 @@ The VM fixed point is reached and the M3b ownership dataflow has shipped, so the
    seen); each instance's C type ALIASES the base (`typedef em_s<base> em_s<inst>;`) with the base's metadata
    (for a BOXED type arg — all the compiler uses); construction is `em_struct(&g_em, <inst>, <fcount>, …)`;
    `box.value` and a `Box<X>`-returning call/param resolve via base_of / sid_of_ty. With generics in, **the
-   parser's struct preamble is now byte-identical** — what remains is a tail of body-level ownership
-   distinctions (own_into_slot vs retain-dance on specific moves, match-payload liveness). Known features
-   still to add: `arr[i].field` DIRECTLY (temp element → materialise-retain-drop), an empty struct-array as a
-   struct FIELD value (em_struct_array), `.len()` on a call-result string (temp-receiver drop), string
+   parser's struct preamble is now byte-identical**. **M5m (done, fixture `enum_payload_ownership.em`)** began
+   the parser body: a `case V(s)` binding of a REFCOUNTED (string/enum/struct) payload field CONSUMED by `+`
+   is `own_into_slot(&g_em, …)` (moves_local==2 — a retain into the concat), not the generic borrow
+   retain-dance (a scalar payload / a `==` operand keeps the retain-dance). Driven by a new per-variant
+   payload-field table (EnumTab.pf_refc) + a per-binding refcounted-borrow flag (sc_refc). **The parser is a
+   BIG module (~500 diff hunks remain)** — its tail is dominated by **string interpolation** (206 sites,
+   still unimplemented — its whole `ast_print` is `"…{expr}…"`), plus array-payload bindings, a struct-array-
+   ELEMENT read passed to a call (own_into_slot the em_index clone), and more ownership. It is a genuine
+   multi-increment (likely multi-session) effort; interpolation is the single biggest remaining feature. Known
+   features still to add: string interpolation, array-payload `.len()`/index, `arr[i].field` DIRECTLY (temp
+   element → materialise-retain-drop), an empty struct-array as a struct FIELD value (em_struct_array),
+   `.len()` on a call-result string (temp-receiver drop), string
    interpolation (206 sites), a SCALAR generic type arg (Box<int> — packed, deferred; unused by the compiler),
    and Option/Result generic ENUMs. Orthogonal follow-up: float-literal emission needs a `%.17g` builtin
    (Ember interpolation is `%g`, so `FLOAT_VAL` can't be produced from a bare `{f}`). OFI-166 (the C

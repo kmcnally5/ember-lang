@@ -1183,6 +1183,8 @@ struct EnumTab {
     v_name: [string]           // ...variant name
     v_tag: [int]               // ...tag (index within its enum)
     v_arity: [int]             // ...payload field count
+    pf_variant: [int]          // flat PAYLOAD-field table -> owning flat-variant index
+    pf_refc: [bool]            // ...is the field a REFCOUNTED single Value (string / enum / struct / generic)?
 
 
     // variant_flat returns the flat-table index of variant `name` (-1 if `name` is not a known variant).
@@ -1204,6 +1206,31 @@ struct EnumTab {
     fn is_variant(self, name: string) -> bool {
         return self.variant_flat(name) >= 0
     }
+
+
+    // payload_refc reports whether the `idx`-th payload field of variant `vname` is a REFCOUNTED single Value
+    // (string / enum / struct) — so binding it and CONSUMING it (a `+` / `==` operand) is own_into_slot.
+    fn payload_refc(self, vname: string, idx: int) -> bool {
+        let vf = self.variant_flat(vname)
+        if vf < 0 {
+            return false
+        }
+        var seen = 0
+        var i = 0
+        loop {
+            if i >= self.pf_variant.len() {
+                break
+            }
+            if self.pf_variant[i] == vf {
+                if seen == idx {
+                    return self.pf_refc[i]
+                }
+                seen = seen + 1
+            }
+            i = i + 1
+        }
+        return false
+    }
 }
 
 
@@ -1214,6 +1241,8 @@ fn build_enum_tab(decls: [ps.Decl]) -> EnumTab {
     var vn: [string] = []
     var vt: [int] = []
     var va: [int] = []
+    var pfv: [int] = []
+    var pfr: [bool] = []
     var i = 0
     loop {
         if i >= decls.len() {
@@ -1228,10 +1257,23 @@ fn build_enum_tab(decls: [ps.Decl]) -> EnumTab {
                     if vi >= variants.len() {
                         break
                     }
+                    let vflat = vo.len()
                     vo.append(id)
                     vn.append(variants[vi].name)
                     vt.append(vi)
                     va.append(variants[vi].fields.len())
+                    var fi = 0
+                    loop {
+                        if fi >= variants[vi].fields.len() {
+                            break
+                        }
+                        let fty = variants[vi].fields[fi].ty
+                        pfv.append(vflat)
+                        // a REFCOUNTED single Value = a BOXED (aek 0), non-array field: string / enum / struct
+                        // / generic. A scalar (aek 1..11) or an array is not.
+                        pfr.append(array_elem_kind_ty(fty) == 0 && is_array_ty(fty) == false)
+                        fi = fi + 1
+                    }
                     vi = vi + 1
                 }
             }
@@ -1240,7 +1282,7 @@ fn build_enum_tab(decls: [ps.Decl]) -> EnumTab {
         }
         i = i + 1
     }
-    return EnumTab { names: names, v_owner: vo, v_name: vn, v_tag: vt, v_arity: va }
+    return EnumTab { names: names, v_owner: vo, v_name: vn, v_tag: vt, v_arity: va, pf_variant: pfv, pf_refc: pfr }
 }
 
 
@@ -1343,6 +1385,7 @@ struct CgcGen {
     sc_array: [bool]           // ...is this binding an ARRAY? (passed to a call by BORROW, not moved like a string)
     sc_elem_kind: [int]        // ...for an array binding: its ELEMENT scalar width-kind (so `arr[i]` is a scalar), else -1
     sc_elem_struct: [int]      // ...for a STRUCT-array binding: its element struct sid (so `arr[i]` / `arr[i].f` resolve), else -1
+    sc_refc: [bool]            // ...is this a REFCOUNTED BORROW (a string/enum enum-payload binding)? consuming it → own_into_slot
     sc_struct: [int]           // ...for a VALUE-STRUCT binding: its struct sid (so `p.f` / storage type resolve), else -1
     indent: int                // current C indentation depth (1 = the function-body level, 4 spaces each)
     st: StructTab              // the declared-struct table (value/boxed classification + field resolution)
@@ -1372,7 +1415,31 @@ struct CgcGen {
         self.sc_array.append(is_arr)
         self.sc_elem_kind.append(elem_kind)
         self.sc_elem_struct.append(0 - 1)     // default: not a struct-array binding (set_last_elem_struct overrides)
+        self.sc_refc.append(false)            // default: not a refcounted borrow (set_last_refc overrides)
         self.sc_struct.append(0 - 1)          // default: not a struct binding (set_last_struct overrides)
+    }
+
+
+    // set_last_refc marks the most-recently pushed binding as a REFCOUNTED borrow (a string/enum enum-payload
+    // binding), so consuming it in a `+` / `==` op is own_into_slot (a retain into the consume), not the
+    // generic retain-dance.
+    fn set_last_refc(mut self, v: bool) {
+        self.sc_refc[self.sc_refc.len() - 1] = v
+    }
+
+
+    fn lookup_refc(self, name: string) -> bool {
+        var i = self.sc_name.len() - 1
+        loop {
+            if i < 0 {
+                break
+            }
+            if self.sc_name[i] == name {
+                return self.sc_refc[i]
+            }
+            i = i - 1
+        }
+        return false
     }
 
 
@@ -1512,6 +1579,7 @@ struct CgcGen {
         var na: [bool] = []
         var ne: [int] = []
         var nes: [int] = []
+        var nrc: [bool] = []
         var ns: [int] = []
         var i = 0
         loop {
@@ -1526,10 +1594,12 @@ struct CgcGen {
             na.append(self.sc_array[i])
             ne.append(self.sc_elem_kind[i])
             nes.append(self.sc_elem_struct[i])
+            nrc.append(self.sc_refc[i])
             ns.append(self.sc_struct[i])
             i = i + 1
         }
         self.sc_elem_struct = nes
+        self.sc_refc = nrc
         self.sc_name = nn
         self.sc_cname = nc
         self.sc_kind = nk
@@ -2003,6 +2073,11 @@ struct CgcGen {
                         return self.move_binding(name)   // `+` consumes → move the owned binding out
                     }
                     return self.retain_dance(e)          // `==`/`!=` only compare → retain (still used later)
+                }
+                if consuming && self.lookup_refc(name) {
+                    // a REFCOUNTED BORROW (a string/enum enum-payload binding) owned INTO the consuming op —
+                    // own_into_slot retains it (moves_local==2); the enum keeps its own reference.
+                    return "own_into_slot(&g_em, {self.lookup_cname(name)})"
                 }
                 return self.retain_dance(e)
             }
@@ -2868,6 +2943,9 @@ struct CgcGen {
                         let bv = self.fresh_var()
                         println("{self.ind()}Value v{bv} = em_enum_field(&g_em, v{sv}, {bi});")
                         self.push(cases[ci].pattern.bindings[bi], "v{bv}", 0 - 1, false, false, false, 0 - 1)   // a borrowed payload field
+                        if self.en.payload_refc(cases[ci].pattern.variant, bi) {
+                            self.set_last_refc(true)      // a refcounted (string/enum) payload → own_into_slot on consume
+                        }
                         bi = bi + 1
                     }
                     self.emit_block_raw(cases[ci].body)
@@ -3195,7 +3273,7 @@ fn is_enum_ty(ty: ps.Ty, en: EnumTab) -> bool {
 
 
 fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: StructTab, en: EnumTab, fn_names: [string], fn_ret_kind: [int], fn_ret_str: [bool], fn_ret_array: [bool], fn_ret_elem_kind: [int], fn_ret_struct: [int], fn_ret_enum: [bool]) {
-    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_elem_struct: [], sc_struct: [], indent: 1, st: st, en: en, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_struct: fn_ret_struct, fn_ret_enum: fn_ret_enum }
+    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_elem_struct: [], sc_refc: [], sc_struct: [], indent: 1, st: st, en: en, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_struct: fn_ret_struct, fn_ret_enum: fn_ret_enum }
     var ai = 0
     if has_self {
         g.push("self", "a0", 0 - 1, false, false, false, 0 - 1)

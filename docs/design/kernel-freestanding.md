@@ -200,10 +200,33 @@ the hosted VM/native backends do, not a fork (no drift; the reason the M1 shim i
 Gates: `make test` 428/0, `make selfhost` 1213/0 (the reproduction fixed point holds — the runtime
 guards changed no hosted codegen), ASan clean, `make test-kernel` PASS (exit 42, output asserted).
 
+## Milestone 3 — an exception vector table: faults print, not hang ✅ (2026-07-02)
+
+Every CPU fault so far (the M1 FP/SIMD trap, the M2 alignment fault) presented as a *silent hang* — the
+CPU branched into an empty vector and spun. Now `kernel/vectors.S` installs the full 16-entry aarch64
+EL1 vector table (2 KiB-aligned per `VBAR_EL1`, each entry 0x80 bytes), routing every exception to a
+common stub that reads `ESR_EL1`/`ELR_EL1`/`FAR_EL1` and calls `em_exception` (`kernel/platform.c`),
+which prints a **kernel panic** and halts:
+
+```
+*** EMBER KERNEL PANIC: CPU exception ***
+  vector=4 (sync)  EC=0x3c  ESR=0xf2000000  ELR=0x40086b2c  FAR=0x0
+  halted.
+```
+
+`boot.S` sets `VBAR_EL1` as soon as the stack is up (before `mmu_init`), so even a setup-time fault is
+reported. The **fault-vector regression** is a second image, `kernel/faultdemo.elf` (from
+`kernel/faultdemo.em`), which deliberately executes a `BRK` via the `cpu_break` direct extern;
+`make test-kernel` boots it and asserts the panic banner + the decoded syndrome (`EC=0x3c`, a BRK).
+`EC` is the field that matters — `0x25` data abort, `0x07` SIMD/FP trapped, `0x3c` BRK — so a future
+fault is a one-line diagnosis instead of a mystery.
+
 ### Next increments
 
-- **Widen the freestanding math/util surface** as needed (soft-float `sqrt`/`floor`/… for graphics-y
-  kernels; a PRNG seeded off a timer) — currently they panic as "unsupported".
-- An **exception vector table** (so a fault is diagnosable, not a silent hang), a **timer + interrupts**
-  (`em_clock` currently returns 0), then MMIO/asm intrinsics (volatile load/store — retires the
-  `extern "c"` shim for hardware access), and the first real driver surface — all in Ember.
+- **A timer + interrupts** (`em_clock` returns 0 today) — configure the GIC + the generic timer, take an
+  IRQ through the (already-present) IRQ vector, and drive a periodic tick. The gateway to a **scheduler**,
+  which is the kernel proper.
+- **Widen the freestanding math/util surface** (soft-float `sqrt`/`floor`; a PRNG seeded off the timer) —
+  currently they panic as "unsupported".
+- **MMIO/asm intrinsics** (volatile load/store — retires the `extern "c"` shim for hardware access), then
+  the first real driver surface, all in Ember.

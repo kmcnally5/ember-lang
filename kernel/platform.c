@@ -34,6 +34,40 @@ static uint8_t em_arena[EM_ARENA_SIZE] __attribute__((aligned(16)));
 static size_t  em_arena_off = 0;
 
 
+// ---- exception handler (kernel milestone 3) --------------------------------------------------------
+// Called from the vector-table stub (kernel/vectors.S) on any CPU exception, with the exception index
+// and the syndrome registers. There is nothing to recover to on a bare-metal fault, so it prints a
+// diagnostic panic and halts — turning what used to be a silent spin into a readable report. The EC
+// (exception class) is the most useful field: 0x25 = data abort, 0x07 = SIMD/FP trapped, 0x3c = BRK, …
+void em_exception(uint64_t kind, uint64_t esr, uint64_t elr, uint64_t far) {
+    static const char *const KINDS[16] = {
+        "EL0 sync", "EL0 irq", "EL0 fiq", "EL0 serror",
+        "sync", "irq", "fiq", "serror",
+        "lower64 sync", "lower64 irq", "lower64 fiq", "lower64 serror",
+        "lower32 sync", "lower32 irq", "lower32 fiq", "lower32 serror",
+    };
+    char buf[160];
+    uart_puts("\n*** EMBER KERNEL PANIC: CPU exception ***\n");
+    snprintf(buf, sizeof buf,
+             "  vector=%llu (%s)  EC=0x%llx  ESR=0x%llx  ELR=0x%llx  FAR=0x%llx\n",
+             (unsigned long long)kind, KINDS[kind & 15],
+             (unsigned long long)((esr >> 26) & 0x3f),
+             (unsigned long long)esr, (unsigned long long)elr, (unsigned long long)far);
+    uart_puts(buf);
+    uart_puts("  halted.\n");
+    for (;;) {
+    }
+}
+
+
+// A deliberate synchronous CPU exception (a BRK), for the fault-vector regression (kernel/faultdemo.em
+// calls it as a direct extern). Proves the vector table catches a fault and reports it, rather than
+// the process hanging silently.
+void cpu_break(void) {
+    __asm__ volatile("brk #0");
+}
+
+
 // ---- MMU: a minimal identity map so unaligned accesses work ----------------------------------------
 // With the MMU OFF (reset state), every data access is treated as Device memory, which faults on any
 // UNALIGNED access — and the Ember runtime is full of them (packed struct fields, 16-byte Value copies

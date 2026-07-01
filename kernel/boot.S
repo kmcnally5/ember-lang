@@ -24,6 +24,13 @@ _start:
     ldr     x0, =stack_top          // set up the stack (grows down from stack_top)
     mov     sp, x0
 
+    // Install the exception vector table (kernel milestone 3) as soon as we have a stack, so a fault
+    // during the rest of setup is a printed panic, not a silent spin. VBAR_EL1 needs 2 KiB alignment
+    // (vector_table provides it).
+    ldr     x0, =vector_table
+    msr     vbar_el1, x0
+    isb
+
     // Enable the MMU with a flat identity map (kernel milestone 2). With the MMU off, every data
     // access is Device memory and faults on unaligned access — which the Ember runtime does
     // constantly. mmu_init (platform.c) maps RAM as Normal cacheable, then turns the MMU on.

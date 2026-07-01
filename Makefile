@@ -401,13 +401,18 @@ test-db: db
 # aarch64 ELF for QEMU `virt`. Opt-in (LLVM cross toolchain + qemu).
 kernel: $(BIN)
 	$(BIN) --emit=c --freestanding kernel/hello.em > kernel/hello.c
+	$(BIN) --emit=c --freestanding kernel/faultdemo.em > kernel/faultdemo.c
 	$(KERNEL_CC) $(KERNEL_CC_FLAGS) -c kernel/boot.S -o kernel/boot.o
-	$(KERNEL_CC) $(KERNEL_CC_FLAGS) $(KERNEL_FS_FLAGS) -c kernel/hello.c -o kernel/hello.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) -c kernel/vectors.S -o kernel/vectors.o
 	$(KERNEL_CC) $(KERNEL_CC_FLAGS) $(KERNEL_FS_FLAGS) -c kernel/platform.c -o kernel/platform.o
 	$(KERNEL_CC) $(KERNEL_CC_FLAGS) $(KERNEL_FS_FLAGS) -c src/runtime.c -o kernel/runtime.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) $(KERNEL_FS_FLAGS) -c kernel/hello.c -o kernel/hello.o
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) $(KERNEL_FS_FLAGS) -c kernel/faultdemo.c -o kernel/faultdemo.o
 	$(KERNEL_CC) $(KERNEL_CC_FLAGS) --ld-path=$(KERNEL_LLD) -T kernel/kernel.ld \
-		kernel/boot.o kernel/hello.o kernel/runtime.o kernel/platform.o -o $(KERNEL_ELF)
-	@echo "Built $(KERNEL_ELF).  Boot it:  make test-kernel"
+		kernel/boot.o kernel/vectors.o kernel/runtime.o kernel/platform.o kernel/hello.o -o $(KERNEL_ELF)
+	$(KERNEL_CC) $(KERNEL_CC_FLAGS) --ld-path=$(KERNEL_LLD) -T kernel/kernel.ld \
+		kernel/boot.o kernel/vectors.o kernel/runtime.o kernel/platform.o kernel/faultdemo.o -o kernel/faultdemo.elf
+	@echo "Built $(KERNEL_ELF) + kernel/faultdemo.elf.  Boot:  make test-kernel"
 
 # Kernel QEMU smoke test — boots kernel.elf on aarch64 virt and greps the UART output. Kept OUT of
 # the dependency-free `make test` (needs the cross toolchain + qemu), like test-graphics / test-db.

@@ -98,6 +98,29 @@ else
     fail=1
 fi
 
+# --- fault-vector regression (kernel milestone 3) ---------------------------------------------------
+# faultdemo.elf deliberately executes a BRK; the exception vector table must catch it and print a
+# kernel panic (rather than hang silently, as a fault did before the vectors existed).
+FAULT_ELF="kernel/faultdemo.elf"
+if [ -f "$FAULT_ELF" ]; then
+    FOUT=$($TIMEOUT "$QEMU" -M virt -cpu cortex-a53 -nographic -semihosting -kernel "$FAULT_ELF" 2>/dev/null)
+    printf '%s\n' "$FOUT"
+    echo "--- (fault demo) ---"
+    if printf '%s' "$FOUT" | grep -q "EMBER KERNEL PANIC"; then
+        echo "PASS: CPU exception caught by the vector table and reported (not a silent hang)"
+    else
+        echo "FAIL: expected a kernel panic banner from the fault demo"
+        fail=1
+    fi
+    # EC=0x3c is a BRK (AArch64) — confirm the syndrome was decoded, not just a generic message.
+    if printf '%s' "$FOUT" | grep -q "EC=0x3c"; then
+        echo "PASS: exception syndrome decoded (EC=0x3c, a BRK)"
+    else
+        echo "FAIL: expected EC=0x3c (BRK) in the panic report"
+        fail=1
+    fi
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "kernel smoke test FAILED"
     exit 1

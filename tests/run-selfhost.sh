@@ -386,7 +386,7 @@ if [ -f "$CCSRC" ]; then
     # actual compiler source). The first native-bootstrap milestone. This list grows as each module's
     # features land in cgen_c.em.
     cmpass=0; cmfail=0
-    for src in selfhost/lexer.em selfhost/parser.em; do
+    for src in selfhost/lexer.em selfhost/parser.em selfhost/checker.em selfhost/codegen.em; do
         oracle=$(cd "$ROOT" && "$BIN" --emit=c "$src" 2>/dev/null)
         if [ -n "$ccbin" ]; then
             actual=$(cd "$ROOT" && "$ccbin" "$src" 2>/dev/null | sed '/^=> 0$/d')
@@ -400,7 +400,7 @@ if [ -f "$CCSRC" ]; then
             echo "FAIL    self-hosted C-emit differs from stage-0 on module $src"
         fi
     done
-    echo "selfhost cgen_c: $cmpass/$((cmpass + cmfail)) whole MODULES self-C-emit byte-identical (lexer, parser …)"
+    echo "selfhost cgen_c: $cmpass/$((cmpass + cmfail)) whole MODULES self-C-emit byte-identical (lexer, parser, checker, codegen — the C-emit FIXED POINT)"
     pass=$((pass + cmpass)); fail=$((fail + cmfail))
 
     [ -n "$ccbin" ] && rm -f "$ccbin"

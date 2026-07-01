@@ -158,7 +158,7 @@ fn array_elem_kind_ty(t: ps.Ty) -> int {
             if name == "u32" { return 7 }
             if name == "u64" { return 8 }
             if name == "f32" { return 9 }
-            if name == "f64" { return 10 }
+            if name == "f64" || name == "float" { return 10 }
             if name == "bool" { return 11 }
             return 0
         }
@@ -323,6 +323,51 @@ fn ret_elem_kind(ret: [ps.Ty]) -> int {
         return ty_scalar_kind(elem_ty_of(ret[0]))
     }
     return 0 - 1
+}
+
+
+// ret_elem_struct is the ELEMENT struct sid of an array-returning fn's return type `[Struct]` (or -1) —
+// so `let xs = f()` of a `[Struct]` return tracks `xs[i]` as a boxed struct (a borrow, not own_into_slot'd).
+fn ret_elem_struct(ret: [ps.Ty], names: [string]) -> int {
+    if ret.len() > 0 && is_array_ty(ret[0]) {
+        return ty_struct_sid(elem_ty_of(ret[0]), names)
+    }
+    return 0 - 1
+}
+
+
+// build_fn_ret_elem_structs is the array-element struct sid of every body-bearing fn (parallel to build_fn_names).
+fn build_fn_ret_elem_structs(decls: [ps.Decl], names: [string]) -> [int] {
+    var out: [int] = []
+    var i = 0
+    loop {
+        if i >= decls.len() {
+            break
+        }
+        match decls[i] {
+            case DFn(f) {
+                if f.has_body {
+                    out.append(ret_elem_struct(f.ret, names))
+                }
+            }
+            case DStruct(name, generics, impls, fields, methods, kind) {
+                var mi = 0
+                loop {
+                    if mi >= methods.len() {
+                        break
+                    }
+                    if methods[mi].has_body {
+                        out.append(ret_elem_struct(methods[mi].ret, names))
+                    }
+                    mi = mi + 1
+                }
+            }
+            case _ {
+            }
+        }
+        i = i + 1
+    }
+    return out
 }
 
 
@@ -782,6 +827,7 @@ struct StructTab {
     f_array: [bool]            // flat field -> is it an array `[T]`? (so `s.field.len()` / `s.field[i]` resolve)
     f_elem: [int]              // ...for an array field: its ELEMENT scalar kind (so `s.field[i]` is a scalar), else -1
     f_elem_struct: [int]       // ...for a `[Struct]` field: its element struct sid (so `s.field[i]` / `s.field[i].f` resolve), else -1
+    f_elem_aek: [int]          // ...for an array field: its ELEMENT ArrayElemKind (so `s.field = []` builds em_array(0, aek)), else -1
     inst_keys: [string]        // generic-struct INSTANCE keys (`Box<Ty>`, …); instance sid = names.len() + index
 
 
@@ -967,6 +1013,24 @@ struct StructTab {
     }
 
 
+    // field_elem_aek returns the ELEMENT ArrayElemKind of struct `sid0`'s array field `fname` (so `s.field =
+    // []` builds em_array(&g_em, 0, aek) at the field's declared element kind), or -1 (not an array field).
+    fn field_elem_aek(self, sid0: int, fname: string) -> int {
+        let sid = self.base_of(sid0)
+        var i = 0
+        loop {
+            if i >= self.f_owner.len() {
+                break
+            }
+            if self.f_owner[i] == sid && self.f_name[i] == fname {
+                return self.f_elem_aek[i]
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+
+
     // field_elem_struct returns the element struct sid of struct `sid0`'s `[Struct]` array field `fname`
     // (so `s.field[i]` / `s.field[i].f` resolve), or -1 (a scalar-element array / not an array / no field).
     fn field_elem_struct(self, sid0: int, fname: string) -> int {
@@ -1133,6 +1197,23 @@ fn ty_struct_sid(t: ps.Ty, names: [string]) -> int {
 // the unboxed-scalar-binding decision, or -1 for a non-numeric kind. Matches the checker's
 // `is_numeric_type(t) ? int_kind(t) : -1` (check.c) — BOOL is NOT numeric, so a `let x = s.boolField` keeps
 // a Value (INT_VAL), not an unboxed C scalar. The inverse of the numeric side of array_elem_kind_ty.
+// aek_to_render_kind maps an ArrayElemKind to its interpolation render-kind (the em_to_string 3rd arg):
+// f32 (9) -> 8, f64/float (10) -> 9, bool (11) -> 10, else 0 (int / non-numeric). Mirrors int_kind on the
+// element type, so `{floatArr[i]}` formats as a float.
+fn aek_to_render_kind(aek: int) -> int {
+    if aek == 9 {
+        return 8
+    }
+    if aek == 10 {
+        return 9
+    }
+    if aek == 11 {
+        return 10
+    }
+    return 0
+}
+
+
 fn aek_to_scalar_kind(aek: int) -> int {
     if aek == 4 {
         return 0                       // i64 / int
@@ -1237,6 +1318,7 @@ fn build_struct_tab(decls: [ps.Decl]) -> StructTab {
     var far: [bool] = []
     var fel: [int] = []
     var fes: [int] = []
+    var fea: [int] = []
     var sid = 0
     var j = 0
     loop {
@@ -1262,9 +1344,11 @@ fn build_struct_tab(decls: [ps.Decl]) -> StructTab {
                     if is_a {
                         fel.append(ty_scalar_kind(elem_ty_of(fty)))
                         fes.append(ty_struct_sid(elem_ty_of(fty), names))   // `[Struct]` field element sid, so s.field[i].f resolves
+                        fea.append(array_elem_kind_ty(elem_ty_of(fty)))     // element AEK, so `s.field = []` builds em_array(0, aek)
                     } else {
                         fel.append(0 - 1)
                         fes.append(0 - 1)
+                        fea.append(0 - 1)
                     }
                     fi = fi + 1
                 }
@@ -1276,7 +1360,7 @@ fn build_struct_tab(decls: [ps.Decl]) -> StructTab {
         j = j + 1
     }
     let insts = build_struct_instances(decls, names)
-    return StructTab { names: names, kinds: kinds, f_owner: fo, f_name: fnm, f_aek: fa, f_scalar: fsc, f_struct: fsd, f_array: far, f_elem: fel, f_elem_struct: fes, inst_keys: insts }
+    return StructTab { names: names, kinds: kinds, f_owner: fo, f_name: fnm, f_aek: fa, f_scalar: fsc, f_struct: fsd, f_array: far, f_elem: fel, f_elem_struct: fes, f_elem_aek: fea, inst_keys: insts }
 }
 
 
@@ -1615,6 +1699,7 @@ struct CgcGen {
     sc_drop: [bool]            // ...is this binding an OWNED heap value (a string/array local) dropped at exit?
     sc_array: [bool]           // ...is this binding an ARRAY? (passed to a call by BORROW, not moved like a string)
     sc_elem_kind: [int]        // ...for an array binding: its ELEMENT scalar width-kind (so `arr[i]` is a scalar), else -1
+    sc_elem_aek: [int]         // ...for an array binding: its ELEMENT ArrayElemKind (0 boxed refcounted / 1..11 scalar) — so a `[bool]` element (11) is not mistaken for a refcounted one, else -1
     sc_elem_struct: [int]      // ...for a STRUCT-array binding: its element struct sid (so `arr[i]` / `arr[i].f` resolve), else -1
     sc_refc: [bool]            // ...is this a REFCOUNTED BORROW (a string/enum enum-payload binding)? consuming it → own_into_slot
     sc_struct: [int]           // ...for a VALUE-STRUCT binding: its struct sid (so `p.f` / storage type resolve), else -1
@@ -1627,6 +1712,7 @@ struct CgcGen {
     fn_ret_str: [bool]         // ...does each fn return a string (a `let x = f()` owned binding)?
     fn_ret_array: [bool]       // ...does each fn return an array (a `let x = f()` owned array binding)?
     fn_ret_elem_kind: [int]    // ...for an array-returning fn: its element scalar kind (so `f()[i]` is a scalar), else -1
+    fn_ret_elem_struct: [int]  // ...for a `[Struct]`-returning fn: its element struct sid (so `let xs = f()` tracks `xs[i]` as a boxed struct), else -1
     fn_ret_struct: [int]       // ...for a value-struct-returning fn: the struct sid (so `let p = f()` is an em_s), else -1
     fn_ret_enum: [bool]        // ...does each fn return an enum (a `let o = f()` OWNED refcounted binding)?
     consts: ConstTab           // module-level `let NAME: int = <literal>` folded constants (TAG_*), inlined by emit_expr
@@ -1647,6 +1733,7 @@ struct CgcGen {
         self.sc_drop.append(drop)
         self.sc_array.append(is_arr)
         self.sc_elem_kind.append(elem_kind)
+        self.sc_elem_aek.append(0 - 1)        // default: unknown element AEK (set_last_elem_aek overrides for array bindings)
         self.sc_elem_struct.append(0 - 1)     // default: not a struct-array binding (set_last_elem_struct overrides)
         self.sc_refc.append(false)            // default: not a refcounted borrow (set_last_refc overrides)
         self.sc_struct.append(0 - 1)          // default: not a struct binding (set_last_struct overrides)
@@ -1710,6 +1797,28 @@ struct CgcGen {
     // so `arr[i]` types as a boxed struct and `arr[i].field` resolves. Called right after push.
     fn set_last_elem_struct(mut self, sid: int) {
         self.sc_elem_struct[self.sc_elem_struct.len() - 1] = sid
+    }
+
+
+    // set_last_elem_aek records the ELEMENT ArrayElemKind of the most-recently pushed array binding (so a
+    // consumed `[bool]` element (AEK 11) is not mistaken for a refcounted string/enum element (AEK 0)).
+    fn set_last_elem_aek(mut self, aek: int) {
+        self.sc_elem_aek[self.sc_elem_aek.len() - 1] = aek
+    }
+
+
+    fn lookup_elem_aek(self, name: string) -> int {
+        var i = self.sc_name.len() - 1
+        loop {
+            if i < 0 {
+                break
+            }
+            if self.sc_name[i] == name {
+                return self.sc_elem_aek[i]
+            }
+            i = i - 1
+        }
+        return 0 - 1
     }
 
 
@@ -1834,6 +1943,7 @@ struct CgcGen {
         var nd: [bool] = []
         var na: [bool] = []
         var ne: [int] = []
+        var nea: [int] = []
         var nes: [int] = []
         var nrc: [bool] = []
         var ns: [int] = []
@@ -1850,6 +1960,7 @@ struct CgcGen {
             nd.append(self.sc_drop[i])
             na.append(self.sc_array[i])
             ne.append(self.sc_elem_kind[i])
+            nea.append(self.sc_elem_aek[i])
             nes.append(self.sc_elem_struct[i])
             nrc.append(self.sc_refc[i])
             ns.append(self.sc_struct[i])
@@ -1865,6 +1976,7 @@ struct CgcGen {
         self.sc_drop = nd
         self.sc_array = na
         self.sc_elem_kind = ne
+        self.sc_elem_aek = nea
         self.sc_struct = ns
         self.sc_render = nrd
     }
@@ -1968,6 +2080,12 @@ struct CgcGen {
                 }
                 return "INT_VAL(0)"
             }
+            case EFloat(v) {
+                // A float literal → FLOAT_VAL(<value>). Stage-0 renders %.17g (exact round-trip); the corpus's
+                // only float literal is 0.0, where Ember's %g interpolation coincides ("0"). A NON-round float
+                // literal would need a %.17g formatter builtin (an orthogonal follow-up, unused so far).
+                return "FLOAT_VAL({v})"
+            }
             case EIdent(name) {
                 if self.en.is_variant(name) && self.lookup_cname(name) == "" {
                     var no_args: [ps.Expr] = []
@@ -1987,6 +2105,18 @@ struct CgcGen {
             }
             case EBinary(op, l, r) {
                 return self.emit_binary(op, l.value, r.value)
+            }
+            case EUnary(op, operand) {
+                // prefix unary: `-x` → em_neg(x, num_kind) · `!x` → em_not(x) · `~x` → em_bitnot(x, num_kind).
+                // num_kind is the result width (0 = i64 for the int subset), like emit_binary. (cgen_c.c:emit_unary.)
+                let uid = ps.unop_id(op)
+                if uid == 2 {
+                    return "em_not({self.emit_expr(operand.value)})"
+                }
+                if uid == 3 {
+                    return "em_bitnot({self.emit_expr(operand.value)}, 0)"
+                }
+                return "em_neg({self.emit_expr(operand.value)}, 0)"
             }
             case ECall(callee, args) {
                 return self.emit_call(callee.value, args)
@@ -2213,7 +2343,7 @@ struct CgcGen {
             let fname = self.st.f_name[self.st.flat_index(sid, f)]
             let fpos = self.slit_index(fields, fname)
             if fpos >= 0 {
-                s = s + ", " + self.emit_consume_arg(fields[fpos].value)   // a boxed struct CONSUMES its fields (owned ones moved in)
+                s = s + ", " + self.emit_field_consume(sid, fname, fields[fpos].value)   // a boxed struct CONSUMES its fields (owned ones moved in; `[]` at the field's kind)
             }
             f = f + 1
         }
@@ -2253,6 +2383,19 @@ struct CgcGen {
                 if self.lookup_drop(name) {
                     return self.move_binding(name)
                 }
+                let sid = self.lookup_struct(name)
+                let is_boxed_struct = sid >= 0 && self.st.is_value(sid) == false
+                if self.lookup_refc(name) && is_boxed_struct == false {
+                    // a REFCOUNTED (string / enum) PAYLOAD binding moved into a container — own_into_slot
+                    // retains it for the container's consume, leaving the enum's own borrow untouched.
+                    return "own_into_slot(&g_em, {self.lookup_cname(name)})"
+                }
+                if self.lookup_array(name) {
+                    // a BORROWED array (an array param / a still-live array binding) stored into a container is
+                    // owned in — own_into_slot CLONES it (arrays are unique-owner, not refcounted), so the
+                    // container gets an independent copy and the borrow's owner keeps its own (moves_local==2).
+                    return "own_into_slot(&g_em, {self.lookup_cname(name)})"
+                }
             }
             case _ {
             }
@@ -2264,6 +2407,27 @@ struct CgcGen {
             return "own_into_slot(&g_em, {self.emit_expr(e)})"
         }
         return self.emit_expr(e)
+    }
+
+
+    // emit_field_consume renders a struct FIELD value (a struct literal field or an `s.f = v` write): an
+    // empty `[]` builds the array at the FIELD's declared element kind (an inline `[Struct]` field →
+    // em_struct_array; else em_array(0, aek)), not the default 0; otherwise it consumes like any container arg.
+    fn emit_field_consume(mut self, sid: int, fname: string, value: ps.Expr) -> string {
+        match value {
+            case EArray(elems, lines) {
+                if elems.len() == 0 {
+                    let fes = self.st.field_elem_struct(sid, fname)
+                    if fes >= 0 && self.st.is_inline_packable(fes) {
+                        return "em_struct_array(&g_em, 0, {fes})"
+                    }
+                    return "em_array(&g_em, 0, {self.st.field_elem_aek(sid, fname)})"
+                }
+            }
+            case _ {
+            }
+        }
+        return self.emit_consume_arg(value)
     }
 
 
@@ -2376,10 +2540,34 @@ struct CgcGen {
             case EIdent(name) {
                 return self.lookup_render(name)
             }
+            case EIndex(object, index) {
+                // a float/bool/sized ARRAY element hole (`{chunk.const_float[i]}`) renders at its element kind.
+                return aek_to_render_kind(self.index_elem_aek(object.value))
+            }
             case _ {
                 return 0
             }
         }
+    }
+
+
+    // index_elem_aek returns the ELEMENT ArrayElemKind of an indexed array: a struct-FIELD array via
+    // field_elem_aek, a binding/param array via its tracked sc_elem_aek, else -1.
+    fn index_elem_aek(self, object: ps.Expr) -> int {
+        match object {
+            case EGet(gobj, gname) {
+                let sid = self.struct_sid_any(gobj.value)
+                if sid >= 0 {
+                    return self.st.field_elem_aek(sid, gname)
+                }
+            }
+            case EIdent(name) {
+                return self.lookup_elem_aek(name)
+            }
+            case _ {
+            }
+        }
+        return 0 - 1
     }
 
 
@@ -2514,7 +2702,7 @@ struct CgcGen {
                 // new slot (own_into_slot = the aliased-read moves_local==2 retain), then the balance-retain
                 // wraps it. A STRUCT element (`toks[i]` — em_index materialises/borrows the record) is only
                 // retained, not owned (its element sid resolves, so struct_sid_any >= 0).
-                if consuming && self.is_array_expr(object.value) && self.index_elem_kind(object.value) < 0 && self.struct_sid_any(e) < 0 {
+                if consuming && self.is_array_expr(object.value) && self.index_elem_refcounted(object.value) && self.struct_sid_any(e) < 0 {
                     let v = self.fresh_var()
                     return "(\{ Value v{v} = own_into_slot(&g_em, {self.emit_expr(e)}); if (IS_OBJ(v{v})) OBJ_RETAIN(AS_OBJ(v{v})); v{v}; \})"
                 }
@@ -2526,7 +2714,10 @@ struct CgcGen {
                 // Consumed by `+`, it is owned into the concat (own_into_slot, moves_local==2); a `==` read passes
                 // the materialised value directly. (cgen_c.c emit_concat_operand's `!drop_object` gate.)
                 if self.object_is_owning_temp(object.value) {
-                    if consuming {
+                    // the own_into_slot rides the FIELD's refcount (moves_local==2), not the receiver: a
+                    // REFCOUNTED field consumed by `+` is owned into the concat; a SCALAR field (or any
+                    // non-consuming / returned read) yields the materialised value as-is (it already owns it).
+                    if consuming && self.st.field_is_refcounted(self.struct_sid_any(object.value), name) {
                         return "own_into_slot(&g_em, {self.emit_expr(e)})"
                     }
                     return self.emit_expr(e)
@@ -2601,7 +2792,7 @@ struct CgcGen {
                 // em_index returns a fresh owned ref moved into the callee). A boxed STRUCT element (a boxed-
                 // pointer array like `[Param]`) is a BORROW (passed as-is, like a boxed-struct binding — the
                 // owner keeps it). A scalar element (an int/… array) is passed as-is.
-                if self.is_array_expr(object.value) && self.index_elem_kind(object.value) < 0 {
+                if self.is_array_expr(object.value) && self.index_elem_refcounted(object.value) {
                     let esid = self.struct_sid_any(e)
                     if esid >= 0 && self.st.is_value(esid) == false && self.st.is_inline_packable(esid) == false {
                         return self.emit_expr(e)   // a boxed (non-inline) struct element → a borrow
@@ -2629,6 +2820,12 @@ struct CgcGen {
                 // the call (a value struct has no heap, so it is NOT an owning temp).
                 let sid = ty_struct_sid(ty.value, self.st.names)
                 return sid >= 0 && self.st.is_value(sid) == false
+            }
+            case ECall(callee, args) {
+                // a call returning a fresh ARRAY or BOXED STRUCT is a non-refcounted owning temp passed to a
+                // BORROW param → the caller drops it after the call (check.c drop_mask). A string/enum-returning
+                // call is MOVED into a refcounted param (own_into_slot), not dropped, so it is not masked here.
+                return self.is_array_expr(e) || self.boxed_sid_of(e) >= 0
             }
             case _ {
                 return false
@@ -2917,6 +3114,10 @@ struct CgcGen {
                                 return self.fn_ret_kind[fi]
                             }
                         }
+                        let qfi = self.qual_free_fi(object.value, mname)   // a module-qualified scalar-returning call `ps.binop_class(op)`
+                        if qfi >= 0 {
+                            return self.fn_ret_kind[qfi]
+                        }
                     }
                     case _ {
                     }
@@ -2937,6 +3138,9 @@ struct CgcGen {
                 return 0 - 1
             }
             case EIdent(name) {
+                if self.lookup_cname(name) == "" && self.consts.lookup_idx(name) >= 0 {
+                    return 0                     // a folded module-level int constant (TY_UNIT = 6) → i64
+                }
                 return self.lookup_kind(name)
             }
             case _ {
@@ -2949,6 +3153,43 @@ struct CgcGen {
     // value_elem_kind infers the ELEMENT scalar kind of an UN-annotated array initialiser: a literal from
     // its first element (a float → f64=9, a string/array element → boxed -1, otherwise i64=0), an
     // array-returning call from its return element kind, an array binding alias from the source's kind.
+    // value_elem_struct resolves the ELEMENT struct sid of an array-valued initialiser that is a CALL
+    // returning `[Struct]` (a free fn / struct method / module-qualified call), or -1. Lets `let xs = f()`
+    // track `xs[i]` as a boxed struct (a borrow), matching the `[T]`-annotated path.
+    fn value_elem_struct(self, value: ps.Expr) -> int {
+        match value {
+            case ECall(callee, args) {
+                match callee.value {
+                    case EIdent(name) {
+                        let fi = self.fn_index(name)
+                        if fi >= 0 {
+                            return self.fn_ret_elem_struct[fi]
+                        }
+                    }
+                    case EGet(object, mname) {
+                        let sid = self.struct_sid_any(object.value)
+                        if sid >= 0 {
+                            let fi = self.fn_index("{self.st.names[sid]}.{mname}")
+                            if fi >= 0 {
+                                return self.fn_ret_elem_struct[fi]
+                            }
+                        }
+                        let qfi = self.qual_free_fi(object.value, mname)
+                        if qfi >= 0 {
+                            return self.fn_ret_elem_struct[qfi]
+                        }
+                    }
+                    case _ {
+                    }
+                }
+            }
+            case _ {
+            }
+        }
+        return 0 - 1
+    }
+
+
     fn value_elem_kind(self, value: ps.Expr) -> int {
         match value {
             case EArray(elems, lines) {
@@ -2978,6 +3219,17 @@ struct CgcGen {
                     case EGet(object, mname) {
                         if self.is_string_expr(object.value) && mname == "bytes" {
                             return 4                      // `s.bytes()` → [u8]; u8 is element scalar kind 4
+                        }
+                        let sid = self.struct_sid_any(object.value)   // an array-returning struct METHOD `self.ty_arg_types()`
+                        if sid >= 0 {
+                            let fi = self.fn_index("{self.st.names[sid]}.{mname}")
+                            if fi >= 0 {
+                                return self.fn_ret_elem_kind[fi]
+                            }
+                        }
+                        let qfi = self.qual_free_fi(object.value, mname)   // a module-qualified array-returning call
+                        if qfi >= 0 {
+                            return self.fn_ret_elem_kind[qfi]
                         }
                     }
                     case _ {
@@ -3028,6 +3280,33 @@ struct CgcGen {
                 return 0 - 1
             }
         }
+    }
+
+
+    // index_elem_refcounted reports whether an indexed array's ELEMENT is a REFCOUNTED single Value (a string
+    // or enum — a boxed AEK-0 element, NOT a struct). Drives the own_into_slot decision when the element is
+    // consumed/returned. Unlike index_elem_kind, a BOOL element (AEK 11, scalar) is correctly NOT refcounted —
+    // ty_scalar_kind maps bool to -1, which index_elem_kind can't distinguish from a boxed element. For a
+    // struct-FIELD array the element AEK is known exactly (field_elem_aek); for a binding/call array we fall
+    // back to "non-scalar element that is not a struct" (the corpus has no consumed [bool] binding array).
+    fn index_elem_refcounted(self, object: ps.Expr) -> bool {
+        match object {
+            case EGet(gobj, gname) {
+                let sid = self.struct_sid_any(gobj.value)
+                if sid >= 0 {
+                    return self.st.field_elem_aek(sid, gname) == 0 && self.st.field_elem_struct(sid, gname) < 0
+                }
+            }
+            case EIdent(name) {
+                let aek = self.lookup_elem_aek(name)   // a binding/param array with a KNOWN element AEK (a [bool] = 11 is scalar)
+                if aek >= 0 {
+                    return aek == 0
+                }
+            }
+            case _ {
+            }
+        }
+        return self.index_elem_kind(object) < 0
     }
 
 
@@ -3166,8 +3445,8 @@ struct CgcGen {
     // element's form — mirroring codegen.em's elem_kind_of so both backends agree with stage-0's checker:
     // a string/array (boxed) element → 0, a float → f64=10, a bool → 11, otherwise i64=4 (int / arithmetic).
     fn elem_kind_of_expr(self, e: ps.Expr) -> int {
-        if self.is_string_expr(e) || self.is_array_expr(e) || self.is_enum_expr(e) {
-            return 0                          // string / array / enum element → boxed
+        if self.is_string_expr(e) || self.is_array_expr(e) || self.is_enum_expr(e) || self.boxed_sid_of(e) >= 0 {
+            return 0                          // string / array / enum / boxed-struct element → boxed
         }
         match e {
             case EStr(parts) {
@@ -3175,6 +3454,12 @@ struct CgcGen {
             }
             case EStructLit(ty, fields) {
                 return 0                      // a struct element is boxed (a Value pointer / packed record)
+            }
+            case EIdent(name) {
+                if self.lookup_refc(name) {
+                    return 0                  // a refcounted (string / enum) PAYLOAD binding element → boxed
+                }
+                return 4
             }
             case EFloat(v) {
                 return 10
@@ -3304,7 +3589,9 @@ struct CgcGen {
                 if self.object_is_owning_temp(e) {
                     return false   // an inline-packable element — em_index already materialised an owned COPY
                 }
-                return self.is_array_expr(object.value) && self.index_elem_kind(object.value) < 0
+                // a refcounted STRING / ENUM element is owned in; a STRUCT element (em_index materialises /
+                // borrows the record) and a scalar (incl. bool) element are passed as-is.
+                return self.is_array_expr(object.value) && self.index_elem_refcounted(object.value) && self.struct_sid_any(e) < 0
             }
             case _ {
                 return false
@@ -3401,10 +3688,18 @@ struct CgcGen {
                     if bsid >= 0 {
                         self.set_last_struct(bsid)          // track the boxed-struct sid so `c.field` resolves
                     }
-                    if arr && ty.len() > 0 {
-                        let esid = ty_struct_sid(elem_ty_of(ty[0]), self.st.names)
+                    if arr {
+                        // a `[Struct]` array binding tracks its element struct sid (so `xs[i]` is a boxed-struct
+                        // borrow) — from the `[T]` annotation, else from an array-returning CALL's element struct.
+                        var esid = 0 - 1
+                        if ty.len() > 0 {
+                            esid = ty_struct_sid(elem_ty_of(ty[0]), self.st.names)
+                            self.set_last_elem_aek(array_elem_kind_ty(elem_ty_of(ty[0])))   // element AEK (a [bool] element isn't refcounted)
+                        } else {
+                            esid = self.value_elem_struct(value.value)
+                        }
                         if esid >= 0 {
-                            self.set_last_elem_struct(esid)   // a `[Struct]` array: `ts[i]` types as a boxed struct
+                            self.set_last_elem_struct(esid)
                         }
                     }
                 }
@@ -3637,7 +3932,7 @@ struct CgcGen {
                         if bsid >= 0 {
                             let fidx = self.st.field_index(bsid, name)
                             let o = self.emit_expr(object.value)
-                            let val = self.emit_call_arg(value.value)
+                            let val = self.emit_field_consume(bsid, name, value.value)   // the field CONSUMES the value (`[]` at the field's kind)
                             println("{self.ind()}em_set_field(&g_em, {o}, {fidx}, {val});")
                         }
                     }
@@ -3930,8 +4225,8 @@ fn is_enum_ty(ty: ps.Ty, en: EnumTab) -> bool {
 }
 
 
-fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: StructTab, en: EnumTab, fn_names: [string], fn_ret_kind: [int], fn_ret_str: [bool], fn_ret_array: [bool], fn_ret_elem_kind: [int], fn_ret_struct: [int], fn_ret_enum: [bool], consts: ConstTab) {
-    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_elem_struct: [], sc_refc: [], sc_struct: [], sc_render: [], indent: 1, st: st, en: en, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_struct: fn_ret_struct, fn_ret_enum: fn_ret_enum, consts: consts }
+fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: StructTab, en: EnumTab, fn_names: [string], fn_ret_kind: [int], fn_ret_str: [bool], fn_ret_array: [bool], fn_ret_elem_kind: [int], fn_ret_elem_struct: [int], fn_ret_struct: [int], fn_ret_enum: [bool], consts: ConstTab) {
+    var g = CgcGen{ next_var: 0, sc_name: [], sc_cname: [], sc_kind: [], sc_unboxed: [], sc_drop: [], sc_array: [], sc_elem_kind: [], sc_elem_aek: [], sc_elem_struct: [], sc_refc: [], sc_struct: [], sc_render: [], indent: 1, st: st, en: en, fn_names: fn_names, fn_ret_kind: fn_ret_kind, fn_ret_str: fn_ret_str, fn_ret_array: fn_ret_array, fn_ret_elem_kind: fn_ret_elem_kind, fn_ret_elem_struct: fn_ret_elem_struct, fn_ret_struct: fn_ret_struct, fn_ret_enum: fn_ret_enum, consts: consts }
     var ai = 0
     if has_self {
         g.push("self", "a0", 0 - 1, false, false, false, 0 - 1)
@@ -3952,6 +4247,7 @@ fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: Stru
             var owned = false
             var is_arr = false
             var ek = 0 - 1
+            var eaek = 0 - 1
             var psid = 0 - 1
             var pesid = 0 - 1
             if f.params[p].ty.len() > 0 {
@@ -3960,11 +4256,15 @@ fn emit_fn_body(f: ps.FnDecl, idx: int, has_self: bool, owner_sid: int, st: Stru
                 is_arr = is_array_ty(f.params[p].ty[0])   // an array param is a BORROW (not dropped at exit)
                 if is_arr {
                     ek = ty_scalar_kind(elem_ty_of(f.params[p].ty[0]))   // its element scalar kind, so `a[i]` is a scalar
+                    eaek = array_elem_kind_ty(elem_ty_of(f.params[p].ty[0]))   // its element AEK, so a `[bool]` element isn't owned
                     pesid = ty_struct_sid(elem_ty_of(f.params[p].ty[0]), st.names)   // a `[Struct]` param: `a[i]` is a boxed struct
                 }
                 psid = st.sid_of_ty(f.params[p].ty[0])   // value OR boxed struct sid this param carries (incl. a generic instance)
             }
             g.push(f.params[p].name, "a{ai}", pk, false, owned, is_arr, ek)
+            if is_arr {
+                g.set_last_elem_aek(eaek)
+            }
             if psid >= 0 {
                 g.set_last_struct(psid)           // value param → read via aN.fM; boxed param → a borrowed Value
             }
@@ -4281,6 +4581,7 @@ fn emit_program(decls: [ps.Decl], filename: string) {
     let stab = build_struct_tab(decls)
     let etab = build_enum_tab(decls, stab.names)
     let ctab = build_const_tab(decls)
+    let fn_ret_elem_struct = build_fn_ret_elem_structs(decls, stab.names)
     let fn_ret_struct = build_fn_ret_structs(decls, stab)
     let fn_ret_enum = build_fn_ret_enum(decls, etab)
     println("// Generated by `emberc --emit=c` from {filename}. Do not edit.")
@@ -4376,7 +4677,7 @@ fn emit_program(decls: [ps.Decl], filename: string) {
         match decls[k] {
             case DFn(f) {
                 if f.has_body {
-                    emit_fn_body(f, b, false, 0 - 1, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct, fn_ret_enum, ctab)
+                    emit_fn_body(f, b, false, 0 - 1, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_elem_struct, fn_ret_struct, fn_ret_enum, ctab)
                     b = b + 1
                     if b < total {
                         println("")
@@ -4391,7 +4692,7 @@ fn emit_program(decls: [ps.Decl], filename: string) {
                         break
                     }
                     if methods[mi].has_body {
-                        emit_fn_body(methods[mi], b, true, owner, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_struct, fn_ret_enum, ctab)
+                        emit_fn_body(methods[mi], b, true, owner, stab, etab, fn_names, fn_ret_kind, fn_ret_str, fn_ret_array, fn_ret_elem_kind, fn_ret_elem_struct, fn_ret_struct, fn_ret_enum, ctab)
                         b = b + 1
                         if b < total {
                             println("")

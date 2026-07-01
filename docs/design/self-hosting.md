@@ -771,7 +771,27 @@ The VM fixed point is reached and the M3b ownership dataflow has shipped, so the
    - **bool is not an unboxed scalar** (`is_numeric_type` excludes it): `let saved = self.no_struct` (a boxed
      struct's bool field) keeps a retained Value, not an `int64_t` — the single fix that collapsed the last big
      cascade (509→3). Float holes render at kind 9 (a per-binding render-kind).
-   Deferred: a SCALAR generic type arg (Box<int> — packed, unused by the compiler), Option/Result generic ENUMs.
+   **🎉 M5q/M5r — THE NATIVE C-EMIT FIXED POINT: all FOUR self-hosted modules (lexer, parser, checker, codegen)
+   C-emit BYTE-IDENTICAL to stage-0 on both the VM and native, gated `make selfhost` "4/4 whole MODULES".** The
+   self-hosted compiler now reproduces its ENTIRE OWN SOURCE through the native backend — the C-emit analogue
+   of the earlier bytecode/VM fixed point. **M5q (checker, 3263 lines)** started at only ~95 hunks (the parser
+   campaign had built most machinery) and closed with: the owning-temp call-arg hoist (`arg_is_owning_temp`
+   now recognises a call returning an array/boxed-struct — dropped by the caller per the checker's drop_mask);
+   `emit_consume_arg` also owns a refcounted enum-PAYLOAD binding (`self.structs.append(name)`); `em_set_field`
+   / struct-literal fields consume via one `emit_field_consume` (`self.field = []` builds the array at the
+   FIELD's declared element kind, an `f_elem_aek` table); `ret_owns` on `arr[i].field` rides the FIELD's
+   refcount (a scalar field → no own); a folded global INT constant unboxes (`var k = TY_UNIT`); the
+   module-qualified call return-kind resolves in `scalar_kind_of` (`let cls = ps.binop_class(op)`); and a new
+   `sc_elem_aek` scope table + `index_elem_refcounted` fix the bool-array-element ambiguity (a `[bool]` element,
+   AEK 11, is a scalar, not a refcounted single-Value like a `[string]`) — the keystone that resolved a real
+   struct-over-clone bug via a `fn_ret_elem_struct` table for `[Struct]`-returning methods. **M5r (codegen,
+   4050 lines)** was ~14 hunks: FLOAT literals (`EFloat` → `FLOAT_VAL`; the corpus's only float literal is 0.0,
+   where Ember's `%g` interpolation coincides with stage-0's `%.17g`); `[float]` element kind; a float array
+   element renders at kind 9 (`aek_to_render_kind`); and a BORROWED array stored into a container is
+   own_into_slot-CLONED (moves_local==2 — arrays are unique-owner, so the container gets an independent copy).
+   Deferred: a SCALAR generic type arg (Box<int> — packed, unused by the compiler), Option/Result generic ENUMs,
+   a NON-round float literal (needs the `%.17g` builtin). **NEXT: link the C-emit front-end + backend into a
+   standalone self-built native `emberc.em` that rebuilds ITSELF to a native binary — the promised land.**
    Orthogonal
    follow-up: float-literal emission needs a `%.17g` builtin
    (Ember interpolation is `%g`, so `FLOAT_VAL` can't be produced from a bare `{f}`). OFI-166 (the C

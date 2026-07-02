@@ -61,8 +61,28 @@ Everything here is wired to real behaviour — it's meant to be a *usable* app, 
 - **Prompt starters** — clickable suggestions on the empty screen.
 - **Scroll‑to‑bottom** button when you've scrolled up; a live character counter on the input.
 
+**Desktop chrome (a Flare primitive campaign — each feature drove a reusable `std/flare` widget, see
+[docs/flare.md](../../docs/flare.md)):**
+
+- **Menu bar** — a File / View / Help strip across the top (dropdowns with keyboard accelerators + a
+  nested "Export" submenu). `f.menubar_begin` / `f.menu` / `f.menu_item_accel` / `f.submenu`.
+- **Command palette** — **⌘K** opens a fuzzy launcher for every action (new chat, settings, theme,
+  zoom, re-dock, export, quit). `f.command_palette`.
+- **Settings controls** — the Appearance toggle is a **checkbox**, the Model picker a **dropdown**, and
+  the text size a **slider** (was a segmented + buttons). `f.checkbox` / `f.dropdown` / `f.slider`.
+- **Slash commands** — typing **`/`** in the composer pops a typeahead (`/new`, `/settings`, `/theme`,
+  `/copy`, `/quit`); Enter/Tab/click runs it. `f.typeahead`.
+- **Conversation tabs** — the conversations you open this session sit as **closeable, reorderable tabs**
+  above the chat (VS Code editor-tabs model; the sidebar stays the full list). `f.tabs`.
+- **Right-click + tooltips** — **right-click** a conversation for its context menu; hover a toolbar
+  button for a **tooltip**. `f.right_clicked` / `f.tooltip`.
+- **Attachments** — **drag files** onto the window to stage them as chips; they're folded into the next
+  message. `dropped_files()`.
+
 These rest on small, reusable graphics natives added to the language: `clipboard_set`/`clipboard_get`,
-`screen_width`/`screen_height` (+ a resizable window), `load_font`/`set_font`, and `key_repeat`.
+`screen_width`/`screen_height` (+ a resizable window), `load_font`/`set_font`, `key_repeat`, and — for the
+desktop-chrome campaign — **`mouse_right_down()`** (right-click context menus) and **`dropped_files()`**
+(the newline-joined paths dragged onto the window this frame).
 
 ## Fonts
 

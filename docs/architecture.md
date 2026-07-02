@@ -1794,3 +1794,51 @@ The mechanism — a compile define `EMBER_FREESTANDING` and a thin platform laye
   representation choices (16-byte SIMD-copied `Value`, packed layouts) dictate specific CPU bring-up.
 
 See [docs/design/kernel-freestanding.md](https://github.com/kmcnally5/ember-lang/blob/main/docs/design/kernel-freestanding.md) for the milestone log.
+
+
+## Decision: self-hosting is carried to a standalone toolchain — the Ember compiler becomes the development surface, stage 0 becomes the frozen seed
+
+The self-hosting bootstrap reached both fixed points (the VM/bytecode reproduction and the native C-emit
+reproduction — a self-built compiler regenerates a byte-identical copy of itself). That proved the compiler
+can compile *itself*; it did **not** make the Ember-written compiler a usable replacement for stage 0. The
+decision is to close that gap: finish self-hosting into a **standalone toolchain** that does everything
+stage 0 does, so stage 0 can stop being the *active* compiler and become purely the frozen re-bootstrap
+seed (the Rust-drops-OCaml / Go-retires-its-C-compiler end state).
+
+- **Why the full campaign, not a partial one.** The goal is *one* compiler, maintained in Ember, so a new
+  language feature or library binding is implemented **once**. Any partial self-hosting fails that: a
+  bytecode-only self-hosted compiler still needs stage 0's C-emit path to link libraries; a C-emit-only one
+  still needs stage 0 for `--emit=run` and loses the VM-vs-native differential (the correctness oracle).
+  Either leaves stage 0 as the active compiler for the other half — every feature implemented **twice**,
+  forever. Full parity is more work once; the partial options are more work indefinitely.
+
+- **The runtime stays C, and that is correct.** "Freeze stage 0" means freeze the *compiler* front-end and
+  codegen (`check.c`, `codegen.c`, `cgen_c.c`, the `main.c` driver). The **runtime** — the VM interpreter
+  (`vm.c`), the refcount/GC runtime (`runtime.c`), the native runtime lib — is the execution substrate, not
+  the compiler, and is kept in C (as Go keeps its runtime, Rust keeps LLVM). Self-hosting the compiler does
+  not entail rewriting the runtime.
+
+- **Bytecode-first sequencing.** The VM is the canonical backend and `--emit=run` gives no-`cc` execution
+  (a core zero-dependency property). So the first runnable self-hosted path is the bytecode one: a
+  serializable `CompiledProgram` container + a C VM loader (`--run-bytecode`), then `codegen.em` to
+  full-corpus coverage, then unify with the checker. Native C-emit parity comes second and folds into the
+  kernel campaign, where the AST→C path's unique value (bare-metal codegen, libC/3rd-party linking) lives.
+  See [docs/design/bytecode-container.md](https://github.com/kmcnally5/ember-lang/blob/main/docs/design/bytecode-container.md)
+  for the Phase 1 format design and [docs/design/self-hosting.md](https://github.com/kmcnally5/ember-lang/blob/main/docs/design/self-hosting.md)
+  for the phased plan.
+
+- **This refines "stage 0 is a frozen, reproducible-from-zero bootstrap reference" (above), it does not
+  contradict it.** Stage 0 is still kept indefinitely and still frozen at `stage0-v0.3.42`; what changes is
+  that once the self-hosted compiler reaches parity, *new* language work happens in the Ember compiler and
+  stage 0 is no longer edited to track it. Stage 0 remains the from-C re-bootstrap oracle; the last
+  self-built `emberc` binary becomes the bootstrap seed for ordinary rebuilds.
+
+- **One sub-decision is deferred to the freeze step (Phase 5), stated now so it is not forgotten:** whether
+  the Ember compiler *restricts itself to the language subset stage 0 can build* (so stage 0 can always
+  rebuild the current `emberc` from C — full from-C reproducibility, the bootstrappable-builds ideal) or
+  *uses new language features freely* (so re-bootstrapping requires a prior `emberc` binary seed — the
+  Rust/Go reality). The first is more disciplined and preserves Trusting-Trust-style reproducibility from C
+  alone; the second is less constraining for language growth. Resolved when parity is in sight, not before.
+
+The campaign is earned the same way every prior stage was — one differential-green, `make selfhost`-gated
+increment at a time, with stage 0 as the oracle — never a big-bang rewrite.

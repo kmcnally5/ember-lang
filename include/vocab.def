@@ -94,6 +94,7 @@ EMBER_BUILTIN("parse_float",   "fn parse_float(s: string) -> float",        "Par
 EMBER_BUILTIN("char_code",     "fn char_code(s: string) -> int",            "The code point of the first character of `s`.")
 EMBER_BUILTIN("from_char_code","fn from_char_code(code: int) -> string",    "A one-character string for the given code point.")
 EMBER_BUILTIN("byte_slice",    "fn byte_slice(s: string, start: int, end: int) -> string", "The raw bytes `[start, end)` of `s` as a string — BYTE-indexed (not code-point), so multi-byte UTF-8 is preserved exactly. Bounds clamp.")
+EMBER_BUILTIN("from_bytes",    "fn from_bytes(bytes: [u8]) -> string",      "A string whose raw bytes are exactly the `[u8]` array — the inverse of `.bytes()`, with NO UTF-8 re-encoding (unlike `from_char_code`), so it can build any byte sequence.")
 EMBER_BUILTIN("read_line",     "fn read_line() -> string",                  "Read one line from stdin, without the trailing newline.")
 EMBER_BUILTIN("read_file",     "fn read_file(path: string) -> string",      "Read the file at `path` and return its whole contents.")
 EMBER_BUILTIN("write_file",    "fn write_file(path: string, text: string)", "Write `text` to the file at `path`, replacing what was there.")

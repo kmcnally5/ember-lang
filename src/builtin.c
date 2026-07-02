@@ -21,6 +21,7 @@ int native_id_for_name(const char *name) {
     if (strcmp(name, "char_code") == 0)      return NATIVE_CHAR_CODE;
     if (strcmp(name, "from_char_code") == 0) return NATIVE_FROM_CHAR_CODE;
     if (strcmp(name, "byte_slice") == 0)     return NATIVE_BYTE_SLICE;
+    if (strcmp(name, "from_bytes") == 0)     return NATIVE_FROM_BYTES;
     if (strcmp(name, "parse_float") == 0)    return NATIVE_PARSE_FLOAT;
     if (strcmp(name, "sqrt") == 0)           return NATIVE_SQRT;
     if (strcmp(name, "pow") == 0)            return NATIVE_POW;
@@ -47,6 +48,7 @@ int native_id_for_name(const char *name) {
     if (strcmp(name, "mouse_x") == 0)             return NATIVE_GFX_MOUSE_X;
     if (strcmp(name, "mouse_y") == 0)             return NATIVE_GFX_MOUSE_Y;
     if (strcmp(name, "mouse_down") == 0)          return NATIVE_GFX_MOUSE_DOWN;
+    if (strcmp(name, "mouse_right_down") == 0)    return NATIVE_GFX_MOUSE_RDOWN;
     if (strcmp(name, "measure_text") == 0)        return NATIVE_GFX_MEASURE_TEXT;
     if (strcmp(name, "text_line_height") == 0)    return NATIVE_GFX_TEXT_LINE_H;
     if (strcmp(name, "char_pressed") == 0)        return NATIVE_GFX_CHAR_PRESSED;
@@ -69,6 +71,7 @@ int native_id_for_name(const char *name) {
     if (strcmp(name, "set_cursor") == 0)          return NATIVE_GFX_SET_CURSOR;
     if (strcmp(name, "clipboard_set") == 0)       return NATIVE_GFX_CLIPBOARD_SET;
     if (strcmp(name, "clipboard_get") == 0)       return NATIVE_GFX_CLIPBOARD_GET;
+    if (strcmp(name, "dropped_files") == 0)       return NATIVE_GFX_DROPPED_FILES;
     if (strcmp(name, "screen_width") == 0)        return NATIVE_GFX_SCREEN_W;
     if (strcmp(name, "screen_height") == 0)       return NATIVE_GFX_SCREEN_H;
     if (strcmp(name, "frame_capture") == 0)       return NATIVE_GFX_FRAME_CAPTURE;

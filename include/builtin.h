@@ -34,9 +34,14 @@ enum {
     NATIVE_HASH_ANY      = 20,// hash(self) for a built-in key — hash any scalar/string Value
     NATIVE_VALUE_EQ      = 21,// eq(self, other) for a built-in key — structural value equality
 
-    NATIVE_BYTE_SLICE    = 22 // byte_slice(s, start, end) -> string — the raw bytes [start,end) of
+    NATIVE_BYTE_SLICE    = 22,// byte_slice(s, start, end) -> string — the raw bytes [start,end) of
                               // s, BYTE-indexed (not code-point); the faithful inverse of .bytes()
                               // over a sub-range. Added for the self-hosted lexer (exact lexemes).
+
+    NATIVE_FROM_BYTES    = 23 // from_bytes(bytes) -> string — a string whose raw buffer is EXACTLY the
+                              // [u8] array's bytes; the inverse of .bytes() with NO UTF-8 re-encoding
+                              // (unlike from_char_code), so it can build ANY byte sequence. The Ember-
+                              // side binary-serializer primitive (docs/design/bytecode-container.md).
 };
 
 // A witness method slot normally holds an Ember function-table index. For a built-in
@@ -97,7 +102,9 @@ enum {
     NATIVE_GFX_HAD_INPUT     = 137, // had_input() -> bool — any mouse move/button/wheel/resize this frame
     NATIVE_GFX_MEASURE_MISSES= 138, // measure_misses() -> int — measure_text cache misses since this frame_begin
     NATIVE_GFX_FRAME_STEPS   = 139, // frame_steps() -> int — physics sub-steps for last frame's elapsed time
-    NATIVE_GFX_SET_ALPHA     = 140  // set_alpha(a) — fade multiplier 0..255 for the following draws
+    NATIVE_GFX_SET_ALPHA     = 140, // set_alpha(a) — fade multiplier 0..255 for the following draws
+    NATIVE_GFX_MOUSE_RDOWN   = 141, // mouse_right_down() -> bool  (right button held — right-click context menus)
+    NATIVE_GFX_DROPPED_FILES = 142  // dropped_files() -> string   (newline-joined paths dropped this frame, "" if none)
 };
 
 // Returns the native id for a built-in function name, or -1 if `name` is not a

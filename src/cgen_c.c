@@ -1496,9 +1496,10 @@ static void emit_call(CgcGen *g, const Expr *e) {
         // above; the verification-only and graphics ids are not part of the native runtime.
         int nid = native_id_for_name(nm);
         // The real native-runtime builtins go through em_native. That's the contiguous READ_LINE..EXIT
-        // band plus byte_slice (id 22, past the witness-only HASH_ANY/VALUE_EQ which are NOT runtime
-        // calls), so it's named explicitly rather than by widening the range over those two.
-        if ((nid >= NATIVE_READ_LINE && nid <= NATIVE_EXIT) || nid == NATIVE_BYTE_SLICE) {
+        // band plus byte_slice (id 22) and from_bytes (id 23, past the witness-only HASH_ANY/VALUE_EQ
+        // which are NOT runtime calls), so they're named explicitly rather than by widening the range.
+        if ((nid >= NATIVE_READ_LINE && nid <= NATIVE_EXIT) || nid == NATIVE_BYTE_SLICE ||
+            nid == NATIVE_FROM_BYTES) {
             fprintf(g->out, "em_native(&g_em, %d, %zu, ", nid, e->as.call.arg_count);
             if (e->as.call.arg_count == 0) {
                 fputs("0)", g->out);

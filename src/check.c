@@ -4549,6 +4549,20 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     }
                     return TY_STRING;
                 }
+                if (nid == NATIVE_FROM_BYTES) {
+                    if (argc != 1) {
+                        type_error(c, e->line, e->col,
+                                   "from_bytes takes one argument (a [u8])");
+                    }
+                    SemType a0 = argc >= 1 ? check_expr(c, e->as.call.args[0]) : TY_ERROR;
+                    // Lenient about the element width (an int literal adapts to u8); only a concretely
+                    // non-array argument is an error, mirroring byte_slice's argument checks.
+                    if (a0 != TY_ERROR && !is_array_type(a0)) {
+                        type_error(c, e->line, e->col,
+                                   "from_bytes requires a [u8] (an array of bytes)");
+                    }
+                    return TY_STRING;
+                }
                 if (nid == NATIVE_ARGS) {
                     if (argc != 0) {
                         type_error(c, e->line, e->col, "args takes no arguments");
@@ -4609,6 +4623,7 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     else if (nid == NATIVE_GFX_MOUSE_X)      { g_argc = 0; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_MOUSE_Y)      { g_argc = 0; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_MOUSE_DOWN)   { g_argc = 0; ret = TY_BOOL; }
+                    else if (nid == NATIVE_GFX_MOUSE_RDOWN)  { g_argc = 0; ret = TY_BOOL; }
                     else if (nid == NATIVE_GFX_MEASURE_TEXT) { g_argc = 2; want = sig_measure; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_TEXT_LINE_H)  { g_argc = 1; want = sig_int1; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_CHAR_PRESSED) { g_argc = 0; ret = TY_INT; }
@@ -4619,6 +4634,7 @@ static SemType check_expr_inner(Checker *c, Expr *e) {
                     else if (nid == NATIVE_GFX_SET_CURSOR)   { g_argc = 1; want = sig_int1; }
                     else if (nid == NATIVE_GFX_CLIPBOARD_SET){ g_argc = 1; want = sig_str1; }
                     else if (nid == NATIVE_GFX_CLIPBOARD_GET){ g_argc = 0; ret = TY_STRING; }
+                    else if (nid == NATIVE_GFX_DROPPED_FILES){ g_argc = 0; ret = TY_STRING; }
                     else if (nid == NATIVE_GFX_SCREEN_W)     { g_argc = 0; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_SCREEN_H)     { g_argc = 0; ret = TY_INT; }
                     else if (nid == NATIVE_GFX_SET_LAYER)    { g_argc = 1; want = sig_int1; }

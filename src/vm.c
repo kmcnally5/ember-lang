@@ -1252,6 +1252,26 @@ static Value call_native(VM *vm, int native_id, Value *args, int argc) {
             if (n > 0) { memcpy(out->chars, s->chars + lo, n); }
             return OBJ_VAL(out);
         }
+        case NATIVE_FROM_BYTES: {
+            // from_bytes(bytes) -> a string whose raw buffer is EXACTLY the [u8] array's bytes. The inverse
+            // of .bytes(): no UTF-8 re-encoding (unlike from_char_code), so it can build ANY byte sequence
+            // — the primitive an Ember-side binary serializer needs (docs/design/bytecode-container.md).
+            // A [u8] array packs one byte per element (AEK_U8), copied directly; any other integer packing
+            // is read element-by-element and masked to a byte, so the builtin is representation-robust.
+            ObjArray *a = argc >= 1 ? AS_ARRAY(args[0]) : NULL;
+            size_t n = a ? a->length : 0;
+            ObjString *out = make_string(RT(vm), n);
+            if (n > 0) {
+                if (a->elem_kind == AEK_U8) {
+                    memcpy(out->chars, a->data, n);
+                } else {
+                    for (size_t i = 0; i < n; i++) {
+                        out->chars[i] = (char)(AS_INT(em_index(RT(vm), OBJ_VAL(a), INT_VAL((int64_t)i))) & 0xFF);
+                    }
+                }
+            }
+            return OBJ_VAL(out);
+        }
         case NATIVE_PARSE_FLOAT: {
             const char *str = argc >= 1 ? AS_CSTRING(args[0]) : "";
             return FLOAT_VAL(strtod(str, NULL));
@@ -1415,6 +1435,8 @@ static Value call_native(VM *vm, int native_id, Value *args, int argc) {
             return INT_VAL(ember_gfx_mouse_y());
         case NATIVE_GFX_MOUSE_DOWN:
             return INT_VAL(ember_gfx_mouse_down());
+        case NATIVE_GFX_MOUSE_RDOWN:
+            return INT_VAL(ember_gfx_mouse_right_down());
         case NATIVE_GFX_MEASURE_TEXT:
             return INT_VAL(ember_gfx_measure_text(AS_CSTRING(args[0]),
                                                   (int)AS_INT(args[1])));
@@ -1445,6 +1467,15 @@ static Value call_native(VM *vm, int native_id, Value *args, int argc) {
                 memcpy(cbs->chars, cb, cblen);
             }
             return OBJ_VAL(cbs);
+        }
+        case NATIVE_GFX_DROPPED_FILES: {
+            const char *df = ember_gfx_dropped_files();
+            size_t dflen = (df != NULL) ? strlen(df) : 0;
+            ObjString *dfs = make_string(RT(vm), dflen);
+            if (dflen > 0) {
+                memcpy(dfs->chars, df, dflen);
+            }
+            return OBJ_VAL(dfs);
         }
         case NATIVE_GFX_SCREEN_W:
             return INT_VAL(ember_gfx_screen_width());

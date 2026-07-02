@@ -182,7 +182,89 @@ for settings dialogs, confirmations, and pickers).
 scrim — a context menu / dropdown (the cursor position is the usual anchor). It has the same
 press-outside-to-close (returns `false`) and background-inert behaviour as the modal, and is filled with
 `menu_item(txt) -> bool` rows (full-width, accent-highlit on hover). Both overlays rest on `std/layout`'s
-floating node — centred (`open_float`) or anchored (`open_float_at`), clamped on-screen.
+floating node — centred (`open_float`) or anchored (`open_float_at`), clamped on-screen. Overlays now **nest
+their draw layer**: each opens one layer above the enclosing one and pops back on close, so a submenu (below)
+or a popover raised from inside a modal stacks correctly above its parent instead of dropping to the base layer.
+
+Menu bar: `menubar_begin()` / `menubar_end()` bracket a **full-width menu strip pinned to the top of the
+window** (File / Edit / View …). It **floats** at `(0, 0)` and takes no space in the flow, so paint the app
+body starting `menubar_height()` pixels down (a `strut(0, menubar_height())`, or — like the Claude-desktop
+app — offset the dock's `y`/`height`). Inside the bar, `menu(label) -> bool` draws one title and, **when that
+menu is open**, drops its panel just below the title and returns `true`; declare the rows in the `if`-body and
+close with `menu_end()`. Clicking a title toggles it; once **any** menu is open, sliding onto another title
+switches to it (the familiar menu-bar hover-follow), and a press outside — or `Esc` — closes it. The rows:
+`menu_item(txt) -> bool` (the shared row, reused from popovers), `menu_item_accel(txt, accel) -> bool` (a row
+with a right-aligned, muted keyboard hint — display-only; bind the real shortcut in your key handling),
+`menu_sep()` (a thin inset rule grouping clusters of rows), and `submenu(label) -> bool` / `submenu_end()` (a
+row with a trailing `▸` that opens a **nested** menu to its right on hover — it stacks one layer above the
+parent menu). A `menu_item*` click dismisses the whole bar menu. The strip rests on the same floating-node +
+overlay-gate machinery as the popover, so theme, tape, and contracts carry over unchanged. The bar tracks the
+open menu with a **per-frame snapshot** (decide what to show from the snapshot; write the next state from this
+frame's input), so exactly one menu — and one submenu — is open per frame, even mid hover-switch.
+
+Command palette: `command_palette(key, commands) -> int` is a self-contained **⌘K launcher** — a centred modal
+holding a live filter field and a keyboard-navigable list of the `commands` (an array of labels) whose text
+matches the query (case-insensitive substring). It **auto-focuses** the field on open (start typing without
+clicking it), `↑`/`↓` move the highlight (wrapping), Enter activates the highlighted match, and Esc / a press
+on the scrim dismisses it. The app owns an `open` bool and calls this only while open; the widget manages its
+own query + selection state and resets them each time it reopens. It **returns** the chosen command's index
+into `commands` when one is activated (Enter or click), `-1` while it stays open with no choice, or `-2` when
+dismissed — so any value `!= -1` is the caller's cue to close it:
+```ember
+if open {
+    let pick = f.command_palette("cmdk", cmds)
+    if pick != -1 {              // -1 = keep open; anything else closes
+        open = false
+        if pick >= 0 { run_command(pick) }
+    }
+}
+```
+It builds on `modal_begin`/`text_field`/`nav_item`, so the theme, the tape, and Enter-handling (`submit()` is
+consumed, so a composer behind it never double-fires) all carry over.
+
+Composer typeahead: `typeahead(key, anchor, query, candidates) -> int` is an **anchored completion popup** for
+a text field — the basis for **slash-commands** (`/`) and `@`-mentions. The caller detects the trigger + the
+partial `query` in its own field and passes the candidate labels; the typeahead filters them (case-insensitive
+substring) and lists them keyboard-navigably in a card **above** the field whose key is `anchor` (a composer
+sits at the window bottom). It returns the accepted candidate's index (Enter / Tab / click), `-1` while open,
+or `-2` when dismissed (Esc). Two things make it composer-friendly: it does **not** gate the field (you keep
+typing while it filters), and it **swallows the Enter it accepts on** (`submit()`), so a composer behind it
+won't also "send". The caller owns the text — on a `>= 0` return it applies the completion (run a command,
+insert a mention) and calls **`clear_field()`** (resets the focused field's live edit buffer to empty, so the
+on-screen field matches the programmatic change rather than the stale keystrokes still in the editor). A
+single-line trigger like `/cmd` never collides with the `text_area`'s own `↑/↓` caret nav (that only moves on
+a multi-line buffer). Slash-command usage in a composer:
+```ember
+input = f.text_area("composer", input)
+var handled = false
+if sstr.starts_with(input, "/") && !sstr.contains(input, " ") && input != dismissed {
+    let pick = f.typeahead("slash", "composer", sstr.cp_slice(input, 1, input.char_count()), commands)
+    if pick == -2 { dismissed = input }             // Esc → keep dismissed until the input changes
+    else if pick >= 0 { handled = true; input = ""; f.clear_field(); run(pick) }
+} else { dismissed = "" }
+if f.submit() && !handled { send(input); input = "" }
+```
+
+Tabs: `tabs(key, labels, active) -> TabResult` draws a horizontal strip of **closeable, reorderable** tab chips
+(browser / editor style). Click a chip to **switch** (the active one is raised to the panel colour with an
+accent underline); click its trailing `×` to **close** it; **drag** a chip left/right to **reorder**. It
+returns a `TabResult` for the frame — `active` (the maybe-changed selection), `closed` (the ×'d index, else
+`-1`), and `moved_from`/`moved_to` (a completed drag-reorder, else `-1`). The **caller owns the list**: on a
+`closed`/`moved_*` it edits its own array (Ember arrays have `append`/`remove_at` but no `insert`, so a reorder
+is `remove_at(from)` then rebuild); the chips **FLIP-animate** to their new slots. Hit-testing (click / close /
+drag) is keyed by tab **index**, so duplicate labels still target the right chip; the FLIP *animation* is keyed
+by label (it follows a tab across a reorder), so **unique labels give the cleanest reorder motion** — if your
+labels can repeat (e.g. conversation titles), de-duplicate them for display. A `TabResult` is `{active, closed,
+moved_from, moved_to}`. Runnable demo: `examples/graphics/25_flare_tabs.em`.
+
+Right-click + tooltips: `right_click() -> bool` reports the **right mouse button's down-edge** this frame
+(built on the `mouse_right_down()` graphics native), and `right_clicked() -> bool` scopes that to the
+**most-recently-drawn widget** — call it right after a `nav_item`/button to open a **context menu** at the
+cursor: `if f.right_clicked() { menu_x = mouse_x(); menu_y = mouse_y(); open = true }`, then render a
+`popover_begin(key, menu_x, menu_y)` of `menu_item`s there. `tooltip(text)` shows a small hint near the cursor
+once the most-recently-drawn widget has been hovered for a short dwell (~0.4s) — call it right after the
+widget: `if f.ghost_button("Copy") {…}  f.tooltip("Copy to clipboard")`. Both rest on the same floating card /
+layer machinery as the popover and never gate the UI. Runnable demo: `examples/graphics/26_flare_context.em`.
 Widgets: `button(txt) -> bool` (secondary), `primary(txt) -> bool` (the headline action, clay accent),
 `danger(txt) -> bool` (a **destructive** action — the theme's red fill, for Delete/Remove/Discard; same shape
 as `primary`, so the colour is the only signal — reach for it only when the action is hard to undo),
@@ -197,7 +279,14 @@ Linear sidebar) with a fill only on hover and the accent fill when `active`;
 ALWAYS place it in a `row` (its `grow` fills WIDTH there; bare in a column it would grow DOWN), optionally with a trailing
 `ghost_button("···")` for per-item actions), `segmented(key, options, selected) -> int` (a
 single-choice control — the selected option filled with the accent, the rest plain; returns the chosen
-index, so it reads `idx = f.segmented(...)`), `avatar(glyph)` (a small rounded accent badge with a centred
+index, so it reads `idx = f.segmented(...)`), `checkbox(key, label, on) -> bool` (a pill toggle + trailing
+label for a boolean setting — pass the value, get the flipped value back: `on = f.checkbox("dark", "Dark
+mode", on)`), `slider(key, value, lo, hi) -> int` (a value track with a draggable knob over the integer
+range `[lo, hi]`; 200px intrinsic, fills a `stretch` parent — `v = f.slider("zoom", v, 60, 220)`),
+`dropdown(key, options, selected) -> int` (a **collapsed** single-choice selector: a box showing the current
+option + a `▾` chevron that drops a popover list on click, picking one sets it and closes — the compact
+alternative to `segmented` when the choices are many or long; sized to the widest option so it never jumps),
+`avatar(glyph)` (a small rounded accent badge with a centred
 glyph — a chat / identity mark), `label(s)`, `text_muted(s)`, `heading(s)` (single-line text — each
 **ellipsizes** to its solved box width when too long (`text-overflow: ellipsis`), never spilling off-screen),
 `divider()` (a

@@ -20,6 +20,7 @@
 import "std/draw" as draw
 import "std/flare" as flare
 import "std/json" as json
+import "std/string" as sstr
 import "anthropic" as api
 import "ollama" as oll
 
@@ -30,6 +31,9 @@ let KEY_CTRL_L  = 341
 let KEY_EQUAL   = 61    // the +/= key (⌘+ zoom in)
 let KEY_MINUS   = 45    // ⌘- zoom out
 let KEY_N       = 78
+let KEY_K       = 75    // ⌘K command palette
+let KEY_COMMA   = 44    // ⌘, open settings
+let KEY_Q       = 81    // ⌘Q quit
 let KEY_ESCAPE  = 256   // stop generation
 
 
@@ -60,7 +64,7 @@ fn tool_defs() -> json.Json {
         ]),
         json.obj([
             json.member("name", json.str("write_file")),
-            json.member("description", json.str("Create or overwrite a UTF-8 text file under the directory the app was launched from, then report the result. The path MUST be relative (no leading '/', no '..') for safety. Use this to save code or text you have produced so the user can open it.")),
+            json.member("description", json.str("Create or overwrite a UTF-8 text file under the directory the app was launched from, then report the result. The path MUST be relative (no leading '/', no '..') for safety. Use this ONLY when the user EXPLICITLY asks you to save or create a file on disk. Do NOT call it just to show a code example or snippet — put example code directly in your reply as a Markdown fenced code block instead.")),
             json.member("input_schema", json.obj([
                 json.member("type", json.str("object")),
                 json.member("properties", json.obj([
@@ -77,6 +81,24 @@ fn tool_defs() -> json.Json {
             ]))
         ])
     ])
+}
+
+
+// default_system is the steering prompt sent when the user hasn't set their own (Settings → System prompt).
+// Without it the model, handed read_file/write_file with tool_choice=auto, reads "write ... code" literally and
+// SAVES a file instead of showing the example inline — so this pins the desktop-chat convention: code goes in
+// the reply as a fenced code block; the file tools are for EXPLICIT file requests only.
+fn default_system() -> string {
+    return "You are Claude, a helpful assistant in a desktop chat app. Show code, commands, and examples INLINE in your reply as Markdown fenced code blocks — never create or write a file just to show an example. Use the write_file tool ONLY when the user explicitly asks you to save or create a file on disk, and read_file only to inspect a file the user refers to."
+}
+
+
+// effective_system returns the user's system prompt if they set one, else the default steering prompt.
+fn effective_system(user: string) -> string {
+    if user.len() > 0 {
+        return user
+    }
+    return default_system()
 }
 
 
@@ -253,14 +275,15 @@ fn provider_label(provider: int) -> string {
 // selected local model advertised the `tools` capability (OFI-135). Centralised so the first send, the
 // agentic re-send after a tool result, and Retry can never drift in how they build or route a request.
 fn send_turn(provider: int, anth_ch: Channel<string>, oll_ch: Channel<string>, anth_model: string, ollama_model: string, max_tokens: int, sys: string, turns: [api.Turn], oll_tools: bool) {
+    let esys = effective_system(sys)                         // fall back to the steering prompt when the user's is empty
     if provider == 1 {
         var tools = json.arr([])                             // no tools unless the local model supports them
         if oll_tools {
             tools = oll.openai_tools(tool_defs())            // reuse the ONE tool catalogue, reshaped to OpenAI form
         }
-        send(oll_ch, oll.build_request(ollama_model, max_tokens, sys, turns, true, tools))
+        send(oll_ch, oll.build_request(ollama_model, max_tokens, esys, turns, true, tools))
     } else {
-        send(anth_ch, api.build_request(anth_model, max_tokens, sys, tool_defs(), turns))
+        send(anth_ch, api.build_request(anth_model, max_tokens, esys, tool_defs(), turns))
     }
 }
 
@@ -340,6 +363,128 @@ fn title_for(turns: [api.Turn]) -> string {
         i = i + 1
     }
     return "New chat"
+}
+
+
+// transcript_export serializes the plain-text turns of a conversation for File ▸ Export (dropped on the
+// clipboard). `md` picks Markdown ("## You" / "## Claude" sections) vs a flat "You:" / "Claude:" plain
+// text. Tool-call / tool-result turns (kind != 0) are skipped — this is the human-readable transcript.
+fn transcript_export(turns: [api.Turn], md: bool) -> string {
+    var out = ""
+    var i = 0
+    loop {
+        if i == turns.len() {
+            break
+        }
+        if turns[i].kind == 0 && turns[i].text.len() > 0 {
+            var who = "Claude: "
+            if md {
+                who = "## Claude"
+                if turns[i].role == 0 {
+                    who = "## You"
+                }
+                out = out + who + "\n\n" + turns[i].text + "\n\n"
+            } else {
+                if turns[i].role == 0 {
+                    who = "You: "
+                }
+                out = out + who + turns[i].text + "\n\n"
+            }
+        }
+        i = i + 1
+    }
+    if out.len() == 0 {
+        out = "(empty conversation)\n"
+    }
+    return out
+}
+
+
+// basename returns the final path component of `path` (the filename) — for an attachment chip label.
+fn basename(path: string) -> string {
+    let parts = path.split("/")
+    if parts.len() > 0 {
+        return parts[parts.len() - 1]
+    }
+    return path
+}
+
+
+// ---- open-conversation tabs (the VS Code editor-tabs model over the sidebar's full list) ----
+
+// int_pos returns the index of `v` in `arr`, or -1.
+fn int_pos(arr: [int], v: int) -> int {
+    var i = 0
+    loop {
+        if i == arr.len() {
+            break
+        }
+        if arr[i] == v {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+
+// insert_int returns `arr` with `v` inserted before index `idx` (idx >= len → appended). Ember arrays have
+// append/remove_at but no insert, so a tab reorder is remove_at(from) then this.
+fn insert_int(arr: [int], idx: int, v: int) -> [int] {
+    var out: [int] = []
+    var k = 0
+    loop {
+        if k == arr.len() {
+            break
+        }
+        if k == idx {
+            out.append(v)
+        }
+        out.append(arr[k])
+        k = k + 1
+    }
+    if idx >= arr.len() {
+        out.append(v)
+    }
+    return out
+}
+
+
+// tab_labels turns the open conversation indices into chip labels: each title ellipsized to a tab width, with
+// any DUPLICATE disambiguated by a " (2)" / " (3)" suffix — the tabs primitive keys a chip by its label, so a
+// tab bar's labels must be unique (many conversations here share a title like "Write and explain some code").
+fn tab_labels(convos: [Conv], open_tabs: [int]) -> [string] {
+    var out: [string] = []
+    var i = 0
+    loop {
+        if i == open_tabs.len() {
+            break
+        }
+        let base = ellipsize(convos[open_tabs[i]].title, 16)
+        var lbl = base
+        var n = 2
+        loop {
+            var dup = false
+            var j = 0
+            loop {
+                if j == out.len() {
+                    break
+                }
+                if out[j] == lbl {
+                    dup = true
+                }
+                j = j + 1
+            }
+            if !dup {
+                break
+            }
+            lbl = base + " ({n})"
+            n = n + 1
+        }
+        out.append(lbl)
+        i = i + 1
+    }
+    return out
 }
 
 
@@ -434,6 +579,13 @@ fn tool_card(mut f: flare.Flare, key: string, name: string, input: string, resul
     f.strut(6, 0)
     f.label(name + "(" + tool_arg_summary(name, input) + ")")
     f.end()
+    if name == "write_file" {                             // show the file's CONTENT as a code block, not raw JSON
+        let content = api.arg_str(input, "content")
+        if content.len() > 0 {
+            f.divider()
+            f.markdown("```\n" + api.cap_text(content, 1500) + "\n```", cw - 48)
+        }
+    }
     if has_result {
         f.divider()
         f.paragraph(api.cap_text(result, 700), cw - 48)
@@ -449,16 +601,17 @@ fn tool_card(mut f: flare.Flare, key: string, name: string, input: string, resul
 
 
 
-// tool_arg_summary renders a tool's args compactly for the card header: read_file shows its quoted path; any
-// other tool falls back to the raw args JSON.
+// tool_arg_summary renders a tool's args compactly for the card HEADER: read_file/write_file show their quoted
+// path (NEVER the raw args — write_file's args include the whole file content, which as raw "…\n…\n…" JSON made
+// the header a garbled one-liner). Any other tool shows a bounded raw-args preview, never the full blob.
 fn tool_arg_summary(name: string, input: string) -> string {
-    if name == "read_file" {
+    if name == "read_file" || name == "write_file" {
         let p = api.arg_str(input, "path")
         if p.len() > 0 {
             return "\"" + p + "\""
         }
     }
-    return input
+    return api.cap_text(input, 100)
 }
 
 
@@ -771,10 +924,14 @@ fn main() -> int {
     // The ACTIVE conversation's transcript, copied OUT into the flat working array (mutated freely).
     var turns: [api.Turn] = convos[active].turns.clone()   // deep-copy out so the stored conversation array isn't aliased by the mutable working copy
     var input = ""                   // the composer's text
+    var ta_dismiss = ""              // a "/"-input the slash typeahead was Esc-dismissed on (suppress until it changes)
+    var open_tabs: [int] = []        // conversations open as tabs above the chat (MRU; the sidebar is the full list)
+    var attachments: [string] = []   // files dragged onto the window, staged as chips until the next message is sent
     var pending = false              // a request is in flight (gates a second send)
     var streaming = false            // currently receiving a reply's token deltas
     var cur_reply = ""               // the in-progress streamed reply (grows token by token)
     var settings_open = false        // the settings dialog (opened from the sidebar gear) is showing
+    var palette_open = false         // the ⌘K command palette is showing
     var menu_for = 0 - 1             // which conversation's "..." context-menu is open (-1 = none)
     var menu_x = 0                   // where the menu was opened (the cursor at click time)
     var menu_y = 0
@@ -891,8 +1048,9 @@ fn main() -> int {
         var switch_to = 0 - 1        // a Recents entry was clicked → switch to it after layout (−1 = none)
         var retry_idx = 0 - 1        // a Retry button was clicked on assistant turn i → regenerate it
         var delete_conv = 0 - 1      // a Delete was chosen in a conversation menu → remove it after layout
+        var quit = false             // File ▸ Quit (⌘Q) → break the render loop after this frame
 
-        // Keyboard shortcuts: ⌘+ / ⌘- zoom the text, ⌘N starts a new chat.
+        // Keyboard shortcuts: ⌘+ / ⌘- zoom the text, ⌘N new chat, ⌘, settings, ⌘Q quit.
         let cmd = key_down(KEY_SUPER_L) || key_down(KEY_SUPER_R) || key_down(KEY_CTRL_L)
         if cmd && key_pressed(KEY_EQUAL) {
             f.zoom_by(10)
@@ -905,12 +1063,111 @@ fn main() -> int {
         if cmd && key_pressed(KEY_N) && !pending {
             new_chat = true
         }
+        if cmd && key_pressed(KEY_COMMA) {
+            settings_open = true
+        }
+        if cmd && key_pressed(KEY_K) {
+            palette_open = true
+        }
+        if cmd && key_pressed(KEY_Q) {
+            quit = true
+        }
         if key_pressed(KEY_ESCAPE) && pending {
             send(stop_ch, true)               // stop generation
         }
 
         draw.begin(f.bg())
         f.begin()
+
+        // File drag-drop: read EVERY frame (even mid-stream) so files dropped while a reply is generating are
+        // still staged — raylib's per-frame drop queue is discarded if unread. The chips render in the composer.
+        let dropped = dropped_files()
+        if dropped.len() > 0 {
+            let dpaths = dropped.split("\n")
+            var dpi = 0
+            loop {
+                if dpi == dpaths.len() {
+                    break
+                }
+                if dpaths[dpi].len() > 0 {
+                    attachments.append(dpaths[dpi])
+                }
+                dpi = dpi + 1
+            }
+        }
+
+        // ---- top menu bar (File / View / Help) — real desktop menus on Flare's menubar primitive. It floats
+        // at the top and takes no flow space, so the dock below is inset by bar_h. Every item drives the SAME
+        // state as the existing controls (⌘N / ⌘, / zoom / theme / re-dock), so the menus and the app agree. ----
+        let bar_h = f.menubar_height()
+        f.menubar_begin()
+        if f.menu("File") {
+            if f.menu_item_accel("New chat", "⌘N") && !pending {
+                new_chat = true
+            }
+            f.menu_sep()
+            if f.submenu("Export") {
+                if f.menu_item("Copy as Markdown") {
+                    clipboard_set(transcript_export(turns, true))
+                    f.toast("Conversation copied as Markdown")
+                }
+                if f.menu_item("Copy as Plain text") {
+                    clipboard_set(transcript_export(turns, false))
+                    f.toast("Conversation copied as text")
+                }
+                f.submenu_end()
+            }
+            f.menu_sep()
+            if f.menu_item_accel("Settings…", "⌘,") {
+                settings_open = true
+            }
+            f.menu_sep()
+            if f.menu_item_accel("Quit", "⌘Q") {
+                quit = true
+            }
+            f.menu_end()
+        }
+        if f.menu("View") {
+            if f.menu_item_accel("Zoom In", "⌘+") {
+                f.zoom_by(10)
+                dirty = true
+            }
+            if f.menu_item_accel("Zoom Out", "⌘−") {
+                f.zoom_by(0 - 10)
+                dirty = true
+            }
+            if f.menu_item("Toggle Theme") {
+                dark = !dark
+                if dark {
+                    f.use_dark()
+                } else {
+                    f.use_light()
+                }
+                dirty = true
+            }
+            f.menu_sep()
+            if dock.leaf_of("Conversations") < 0 {          // only offer to show a panel that's currently closed
+                if f.menu_item("Show Conversations") {
+                    let _ = dock.split_before(dock.leaf_of("Chat"), "Conversations", true, 0.26)
+                }
+            }
+            if dock.leaf_of("Inspector") < 0 {
+                if f.menu_item("Show Inspector") {
+                    let _ = dock.split(dock.leaf_of("Chat"), "Inspector", true, 0.76)
+                }
+            }
+            if f.menu_item("Reset Layout") {
+                dock = build_workspace()
+            }
+            f.menu_end()
+        }
+        if f.menu("Help") {
+            if f.menu_item("About Claude (Ember)") {
+                f.toast("A Claude desktop app written in Ember + Flare")
+            }
+            f.menu_end()
+        }
+        f.menubar_end()
 
         // ---- body: a DOCKABLE WORKSPACE — Conversations | Chat | Inspector (std/flare DockTree). Drag a
         // divider to re-proportion, click a panel's ✕ to close it (Chat is PINNED — the anchor, no ✕), and
@@ -933,7 +1190,7 @@ fn main() -> int {
 
         f.dock_pin("Chat")                                 // Chat is the permanent anchor — draws no close ✕
         let dm = 12
-        let dhit = f.dock_begin(dock, dm, dm, screen_width() - 2 * dm, screen_height() - 2 * dm)
+        let dhit = f.dock_begin(dock, dm, dm + bar_h, screen_width() - 2 * dm, screen_height() - 2 * dm - bar_h)
         if dhit >= 0 {
             let pid = dock.close_tab(dhit)                 // a ✕ → close the active tab (leaf survives if grouped)
             f.forget(pid)
@@ -972,7 +1229,12 @@ fn main() -> int {
                 f.key("_cv{ci}")
                 f.row(flare.START, flare.CENTER)
                 let clicked = f.nav_item(convos[ci].title, ci == active)   // grows to fill the row; ellipsizes
-                if f.ghost_button("...") {                  // per-conversation context menu (Delete)
+                if f.right_clicked() {                      // RIGHT-CLICK the row → same context menu at the cursor
+                    menu_for = ci
+                    menu_x = mouse_x()
+                    menu_y = mouse_y()
+                }
+                if f.ghost_button("...") {                  // …or the "..." affordance (per-conversation context menu)
                     menu_for = ci
                     menu_x = mouse_x()
                     menu_y = mouse_y()
@@ -984,31 +1246,70 @@ fn main() -> int {
                 }
                 ci = ci + 1
             }
-            f.spacer()                       // push the settings entry to the foot of the panel
-            f.row(flare.START, flare.CENTER) // wrap it: nav_item's grow=1 fills WIDTH in a row
-            if f.nav_item("Settings", false) {
-                settings_open = true
-            }
-            f.end()
+            // (Settings lives in the menu bar's File menu, the ⌘K palette, and the Inspector panel now — the
+            // bottom-pinned "Settings" nav row here was redundant AND collided with a long Recents list.)
             f.dock_panel_end()
         }
 
         // --- Chat: a toolbar (title / model / re-dock), the scrollable transcript, and the composer ---
         if f.dock_panel("Chat") {
+            // Open-conversation tabs (VS Code editor-tabs model): the conversations opened this session sit as a
+            // tab strip above the toolbar — click to switch, × to CLOSE THE TAB (not delete the chat), drag to
+            // reorder. The Conversations sidebar stays the full list. The active chat is always an open tab (MRU).
+            if int_pos(open_tabs, active) < 0 {
+                open_tabs = insert_int(open_tabs, 0, active)
+                loop {
+                    if open_tabs.len() <= 6 {
+                        break
+                    }
+                    open_tabs.remove_at(open_tabs.len() - 1)      // cap the strip; drop the least-recent
+                }
+            }
+            if open_tabs.len() > 1 {
+                var apos = int_pos(open_tabs, active)
+                if apos < 0 {
+                    apos = 0
+                }
+                f.row(flare.START, flare.CENTER)
+                let tr = f.tabs("convtabs", tab_labels(convos, open_tabs), apos)
+                f.end()
+                if tr.active != apos && tr.active >= 0 && tr.active < open_tabs.len() {
+                    switch_to = open_tabs[tr.active]              // a tab click → switch conversation (after layout)
+                }
+                if tr.closed >= 0 && tr.closed < open_tabs.len() {
+                    let was_active = open_tabs[tr.closed] == active
+                    open_tabs.remove_at(tr.closed)               // close the TAB only (the conversation is untouched)
+                    if was_active && open_tabs.len() > 0 {
+                        var ni = tr.closed
+                        if ni >= open_tabs.len() {
+                            ni = open_tabs.len() - 1
+                        }
+                        switch_to = open_tabs[ni]
+                    }
+                }
+                if tr.moved_from >= 0 && tr.moved_to >= 0 && tr.moved_from < open_tabs.len() {
+                    let m = open_tabs[tr.moved_from]
+                    open_tabs.remove_at(tr.moved_from)
+                    open_tabs = insert_int(open_tabs, tr.moved_to, m)
+                }
+            }
+
             // Toolbar: title on the left; model + re-dock affordances pushed to the right.
             f.row(flare.START, flare.CENTER)
             f.text_muted(ellipsize(hdr, 40))
             f.spacer()
             f.text_muted("· {active_model}")
             if dock.leaf_of("Conversations") < 0 {         // closed → offer to re-dock it on the left
-                if f.ghost_button("☰ Chats") {
+                if f.ghost_button("Chats") {               // (was "☰ Chats" — U+2630 tofus in the embedded font)
                     let _ = dock.split_before(dock.leaf_of("Chat"), "Conversations", true, 0.26)
                 }
+                f.tooltip("Re-open the Conversations panel")
             }
             if dock.leaf_of("Inspector") < 0 {             // closed → offer to re-dock it on the right
-                if f.ghost_button("ⓘ Inspector") {
+                if f.ghost_button("Inspector") {           // (was "ⓘ Inspector" — U+24D8 tofus)
                     let _ = dock.split(dock.leaf_of("Chat"), "Inspector", true, 0.76)
                 }
+                f.tooltip("Re-open the Inspector panel")
             }
             f.end()
 
@@ -1097,7 +1398,7 @@ fn main() -> int {
                 if streaming {
                     var caret = ""                       // a blinking caret marks the live, growing reply
                     if (tick / 20) % 2 == 0 {
-                        caret = " ▌"
+                        caret = " |"                     // (was "▌" U+258C — tofus; "|" is a safe text caret)
                     }
                     let _ = claude_turn(f, cur_reply + caret, cw, "stream", false)
                 } else if pending {
@@ -1119,10 +1420,85 @@ fn main() -> int {
                 }
                 f.end()
             } else {
+                // Attachment chips (files dropped onto the window, staged at the top of the frame): filename + ×.
+                if attachments.len() > 0 {
+                    f.row(flare.START, flare.CENTER)
+                    f.text_muted("Attached:")
+                    var remove_att = 0 - 1
+                    var ai = 0
+                    loop {
+                        if ai == attachments.len() {
+                            break
+                        }
+                        f.key("att{ai}")
+                        if f.ghost_button("× " + basename(attachments[ai])) {   // click a chip to un-attach it
+                            remove_att = ai
+                        }
+                        f.key_clear()
+                        ai = ai + 1
+                    }
+                    f.end()
+                    if remove_att >= 0 {
+                        attachments.remove_at(remove_att)
+                    }
+                }
+
                 input = f.text_area("composer", input)   // multi-line: Shift+Enter = newline, Enter = send
-                if f.submit() {
-                    if input.len() > 0 {
-                        turns.append(api.mk_turn(0, input))
+                // Slash-command typeahead: a "/" + partial (no space) pops a filtered command list above the
+                // composer — ↑/↓ to move, Enter/Tab/click to RUN it, Esc to dismiss (like Claude Code's "/").
+                var slash_handled = false
+                if sstr.starts_with(input, "/") && !sstr.contains(input, " ") && input != ta_dismiss {
+                    let pick = f.typeahead("comp_slash", "composer", sstr.cp_slice(input, 1, input.char_count()),
+                                           ["new", "settings", "theme", "copy", "quit"])
+                    if pick == 0 - 2 {
+                        ta_dismiss = input                 // Esc → keep it dismissed until the input changes
+                    } else if pick >= 0 {
+                        slash_handled = true
+                        input = ""
+                        f.clear_field()                    // reset the composer's live buffer to match
+                        if pick == 0 {
+                            if !pending {
+                                new_chat = true
+                            }
+                        } else if pick == 1 {
+                            settings_open = true
+                        } else if pick == 2 {
+                            dark = !dark
+                            if dark {
+                                f.use_dark()
+                            } else {
+                                f.use_light()
+                            }
+                            dirty = true
+                        } else if pick == 3 {
+                            clipboard_set(transcript_export(turns, true))
+                            f.toast("Conversation copied as Markdown")
+                        } else if pick == 4 {
+                            quit = true
+                        }
+                    }
+                } else {
+                    ta_dismiss = ""                        // left the slash context → re-arm the typeahead
+                }
+                if f.submit() && !slash_handled {
+                    var msg = input
+                    if attachments.len() > 0 {                 // fold the staged attachments into the message text —
+                        var att = "\n\n[Attached files:"       // ONE PATH PER LINE (a path may contain commas/spaces)
+                        var qi = 0
+                        loop {
+                            if qi == attachments.len() {
+                                break
+                            }
+                            att = att + "\n  " + attachments[qi]
+                            qi = qi + 1
+                        }
+                        msg = msg + att + "\n]"
+                        attachments = []
+                    }
+                    // Sends when there's ANY content — plain text, or an attachments-only message (drop files +
+                    // Enter with no text = "here are these files", so `msg` is the non-empty attachment block).
+                    if msg.len() > 0 {
+                        turns.append(api.mk_turn(0, msg))
                         want_send = true
                         f.scroll_to_bottom("transcript")
                     }
@@ -1166,7 +1542,7 @@ fn main() -> int {
             if sys_prompt.len() > 0 {
                 f.paragraph(sys_prompt, iw)
             } else {
-                f.label("(none — set in Settings)")
+                f.label("(default — override in Settings)")
             }
             f.text_muted("Tools")
             if provider == 1 {
@@ -1210,13 +1586,9 @@ fn main() -> int {
             f.divider()
 
             f.text_muted("Appearance")
-            var appear = 0
-            if !dark {
-                appear = 1
-            }
-            let new_appear = f.segmented("appearance", ["Dark", "Light"], appear)
-            if new_appear != appear {
-                dark = (new_appear == 0)
+            let new_dark = f.checkbox("dark", "Dark mode", dark)
+            if new_dark != dark {
+                dark = new_dark
                 if dark {
                     f.use_dark()
                 } else {
@@ -1267,7 +1639,9 @@ fn main() -> int {
                 if use_env {
                     f.text_muted("Pinned by ANTHROPIC_MODEL")
                 } else {
-                    let nm = f.segmented("model", ["Opus 4.8", "Sonnet 4.6", "Haiku 4.5"], model_idx)
+                    f.row(flare.START, flare.CENTER)
+                    let nm = f.dropdown("model", ["Opus 4.8", "Sonnet 4.6", "Haiku 4.5"], model_idx)
+                    f.end()
                     if nm != model_idx {
                         model_idx = nm
                         dirty = true
@@ -1292,18 +1666,12 @@ fn main() -> int {
             // composer's send on the next frame, then carry on building the dialog.
             let _ = f.submit()
 
-            f.text_muted("Text size")
-            f.row(flare.START, flare.CENTER)
-            if f.button("Smaller") {
-                f.zoom_by(0 - 10)
+            f.text_muted("Text size — {f.zoom}%")
+            let nz = f.slider("zoom", f.zoom, 60, 220)
+            if nz != f.zoom {
+                f.set_zoom(nz)
                 dirty = true
             }
-            f.label("{f.zoom}%")
-            if f.button("Larger") {
-                f.zoom_by(10)
-                dirty = true
-            }
-            f.end()
 
             f.divider()
             f.row(flare.END, flare.CENTER)
@@ -1312,6 +1680,57 @@ fn main() -> int {
             }
             f.end()
             f.modal_end()
+        }
+
+        // ---- ⌘K command palette: a fuzzy launcher for every app action, wired to the SAME state the menu
+        // bar / shortcuts drive. Returns the chosen index (−1 = still open); any other value closes it. ----
+        if palette_open {
+            let pick = f.command_palette("cmdk", ["New chat", "Settings…", "Toggle theme", "Zoom in", "Zoom out", "Reset zoom", "Show Conversations", "Show Inspector", "Reset layout", "Copy conversation as Markdown", "Copy conversation as plain text", "Quit"])
+            if pick != 0 - 1 {
+                palette_open = false
+                if pick == 0 {
+                    if !pending {
+                        new_chat = true
+                    }
+                } else if pick == 1 {
+                    settings_open = true
+                } else if pick == 2 {
+                    dark = !dark
+                    if dark {
+                        f.use_dark()
+                    } else {
+                        f.use_light()
+                    }
+                    dirty = true
+                } else if pick == 3 {
+                    f.zoom_by(10)
+                    dirty = true
+                } else if pick == 4 {
+                    f.zoom_by(0 - 10)
+                    dirty = true
+                } else if pick == 5 {
+                    f.set_zoom(80)
+                    dirty = true
+                } else if pick == 6 {
+                    if dock.leaf_of("Conversations") < 0 {
+                        let _ = dock.split_before(dock.leaf_of("Chat"), "Conversations", true, 0.26)
+                    }
+                } else if pick == 7 {
+                    if dock.leaf_of("Inspector") < 0 {
+                        let _ = dock.split(dock.leaf_of("Chat"), "Inspector", true, 0.76)
+                    }
+                } else if pick == 8 {
+                    dock = build_workspace()
+                } else if pick == 9 {
+                    clipboard_set(transcript_export(turns, true))
+                    f.toast("Conversation copied as Markdown")
+                } else if pick == 10 {
+                    clipboard_set(transcript_export(turns, false))
+                    f.toast("Conversation copied as text")
+                } else if pick == 11 {
+                    quit = true
+                }
+            }
         }
 
         f.finish()
@@ -1410,6 +1829,23 @@ fn main() -> int {
             if delete_conv < active {
                 active = active - 1
             }
+            // remap the open tabs: drop the deleted conversation and shift indices above it down one
+            var remapped: [int] = []
+            var rti = 0
+            loop {
+                if rti == open_tabs.len() {
+                    break
+                }
+                var t = open_tabs[rti]
+                if t != delete_conv {
+                    if t > delete_conv {
+                        t = t - 1
+                    }
+                    remapped.append(t)
+                }
+                rti = rti + 1
+            }
+            open_tabs = remapped
             if convos.len() == 0 {
                 convos.append(Conv { title: "New chat", turns: [] })
                 active = 0
@@ -1442,6 +1878,10 @@ fn main() -> int {
         // Persist the store at frame end if anything changed (a send, a committed reply, new/switch/delete/retry).
         if dirty {
             save_store(convos, active, turns, model_idx, tok_idx, dark, f.zoom, sys_prompt, dock, provider, ollama_model)
+        }
+
+        if quit {            // File ▸ Quit (⌘Q): leave the render loop (workers + graphics torn down below)
+            break
         }
     }
     close(req_ch)        // wake the Claude worker out of recv → it returns None and exits

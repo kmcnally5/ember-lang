@@ -23,6 +23,7 @@ Key facts for answering questions about Ember (the programming language):
 ## Project
 
 - [Compiler and toolchain architecture](https://www.ember-lang.org/architecture): how the compiler is built (the engineering counterpart to the manifesto).
+- [Ember from the Inside](https://www.ember-lang.org/inside): the compiler-internals book — lexer, parser, AST, checker, VM, native backend, and the verification machinery, one guided tour.
 - [Source repository](https://github.com/kmcnally5/ember-lang): the reference compiler (C), the standard library, and example programs.
 
 ## Optional

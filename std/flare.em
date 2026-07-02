@@ -85,6 +85,19 @@ let _VITEM  = 38        // a virtualized-list item: a transparent row container 
                         //  loop records into vrows[] so next frame's window math knows each item's size
 let _FADE_BEGIN = 39    // multiply the enclosed widgets' opacity by an amount (the node slot carries 0..255)
 let _FADE_END   = 40    // close a fade bracket (restore the parent opacity)
+let _MENUBAR_BEGIN = 41 // a full-width top menu-bar strip (bar surface + a bottom hairline), floated at (0,0)
+let _MBLABEL    = 42    // a top-bar menu label (File/Edit/…): normal ink over a hover fill
+let _MBLABEL_ON = 43    // …the OPEN menu label — a stronger (pressed) fill so it reads as the active menu
+let _MENUITEM_A = 44    // a menu row with a right-aligned accelerator ("New chat   ⌘N"); text = "label\taccel"
+let _MENU_SEP   = 45    // a thin inset separator rule inside a menu (a grouped divider between item clusters)
+let _SUBMENU    = 46    // a menu row that opens a NESTED menu to its right (a trailing "▸" disclosure)
+let _SUBMENU_ON = 47    // …the submenu row whose nested menu is currently open (kept highlit)
+let _CHECKBOX    = 48   // a pill toggle + trailing label, OFF (text = label)
+let _CHECKBOX_ON = 49   // …the toggle ON (accent-filled pill, knob to the right)
+let _SLIDER = 50        // a horizontal value track + draggable knob (text = fill permille "0".."1000")
+let _DROPDOWN = 51      // a collapsed selector box: left label + right "▾" chevron (opens a popover list)
+let _TAB = 52          // a tab chip (inactive): bar fill, muted label, a trailing "×" close zone
+let _TAB_ON = 53       // …the active tab chip: panel fill, ink label, an accent underline
 
 // HANDLE_W is the on-screen thickness (px) of a splitter's hit band — wide enough to grab, a hairline to look
 // at. Public so a caller can account for it when computing the remaining content width beside a resized pane.
@@ -98,6 +111,10 @@ let SPRING_DT = 0.0166667
 let KEY_ENTER = 257   // raylib keycode; text_field reports Enter to the caller via submit()
 let KEY_LSHIFT = 340  // Shift → newline in a text_area (plain Enter submits)
 let KEY_RSHIFT = 344
+let KEY_ESC = 256     // Escape — closes an open menu-bar dropdown / command palette
+let KEY_DOWN_ = 264   // ↓ — command-palette / typeahead selection down
+let KEY_UP_ = 265     // ↑ — command-palette / typeahead selection up
+let KEY_TAB = 258     // Tab — accept the highlighted typeahead completion
 let MODAL_LAYER = 2000000   // modals draw above everything, including std/ui's menus/tooltips (POPUP_LAYER)
 
 
@@ -116,6 +133,17 @@ struct Rect {
 struct VClip {
     start: int
     end: int
+}
+
+
+// TabResult is what tabs() reports for one frame: `active` is the (maybe changed) selected tab index; `closed`
+// is the index whose × was clicked this frame (else -1); `moved_from`/`moved_to` describe a drag-reorder that
+// completed this frame (else -1) — the caller applies the move to its own data and the tabs FLIP-animate.
+struct TabResult {
+    active: int
+    closed: int
+    moved_from: int
+    moved_to: int
 }
 
 
@@ -307,6 +335,9 @@ struct Flare {
     pox: int
     poy: int
     _submit: bool                   // set when Enter is pressed in a focused text_field; read via submit()
+    _rdown: bool                    // right mouse button held THIS frame (mouse_right_down); for right_click()
+    _rwas: bool                     // …held LAST frame — the pair gives the right-button down-edge
+    _last_wid: int                  // wid of the most-recently hit-tested widget — tooltip() anchors to it
     mono: int                       // monospace font slot for code blocks + inline `code` (-1 = not loaded)
     italic: int                     // italic font slot for inline *emphasis* (-1 = not loaded)
     zoom: int                       // text-size zoom percent (100 = the theme's base 19px)
@@ -354,6 +385,9 @@ struct Flare {
         self.scope = ""
         self.ui.set_scope("")
         self._submit = false
+        self._rwas  = self._rdown              // right-button edge tracking (for right_click / context menus)
+        self._rdown = mouse_right_down()
+        self._last_wid = 0
         self._mdseq = 0
         self._modal = self._modal_was   // a modal was open last frame → gate the background this frame
         self._modal_was = false
@@ -405,6 +439,8 @@ struct Flare {
         var oys: [int] = []
         var alpha_cur = 255         // active fade opacity (0..255); a stack so fade brackets nest (multiply)
         var alphas: [int] = []
+        var layer_cur = 0           // active draw layer; a stack so overlays (modal/popover/submenu) nest —
+        var layers: [int] = []      // each _*_BEGIN pushes the current layer and lifts above it, _*_END pops
         var i = 0
         loop {
             if i == self.rnode.len() {
@@ -439,10 +475,24 @@ struct Flare {
                 clip_pop()
                 scroll_dy = 0
                 cull = false
+            } else if kind == _MENUBAR_BEGIN {
+                // The top menu-bar strip: a full-width bar surface with a bottom hairline, painted at the
+                // float's solved rect (0,0,screen_width,height). Stays on the base layer — it never overlaps
+                // the app body (which the app offsets DOWN by menubar_height()); only its dropped menus lift.
+                let n  = self.rnode[i]
+                let px = self.lo.x(n)
+                let py = self.lo.y(n)
+                let pw = self.lo.w(n)
+                let ph = self.lo.h(n)
+                fill_round(px, py, pw, ph, 0, self.ui.style.bar, 255)
+                fill_round(px, py + ph - 1, pw, 1, 0, self.ui.style.border, 255)
+                self.rects.set(self.rid[i], Rect { x: px, y: py, w: pw, h: ph })   // for next frame's outside-press test
             } else if kind == _MODAL_BEGIN {
-                // A floating dialog: lift onto the modal layer (so it draws over everything), dim the whole
-                // window as a scrim, then paint the centred panel surface. Its children follow on this layer.
-                set_layer(MODAL_LAYER)
+                // A floating dialog: lift a layer above the current one (so nested overlays stack), dim the
+                // whole window as a scrim, then paint the centred panel surface. Children follow on this layer.
+                layers.append(layer_cur)
+                layer_cur = self._lift(layer_cur)
+                set_layer(layer_cur)
                 let n  = self.rnode[i]
                 let px = self.lo.x(n)
                 let py = self.lo.y(n)
@@ -452,11 +502,15 @@ struct Flare {
                 ui.card(px, py, pw, ph, self.ui.style.panel, self.ui.style, true)
                 self.rects.set(self.rid[i], Rect { x: px, y: py, w: pw, h: ph })   // for next frame's scrim hit-test
             } else if kind == _MODAL_END {
-                set_layer(0)
+                if layers.len() > 0 { layer_cur = layers.remove_at(layers.len() - 1) }
+                set_layer(layer_cur)
             } else if kind == _POPOVER_BEGIN {
-                // An anchored menu: lift onto the modal layer and paint its raised card — no scrim, so the
-                // background stays visible (but inert via the gate). Its menu_items follow on this layer.
-                set_layer(MODAL_LAYER)
+                // An anchored menu: lift a layer above the current one and paint its raised card — no scrim,
+                // so the background stays visible (but inert via the gate). A submenu opened from inside another
+                // menu lifts again, so it stacks above its parent; _POPOVER_END pops back to the parent's layer.
+                layers.append(layer_cur)
+                layer_cur = self._lift(layer_cur)
+                set_layer(layer_cur)
                 let n  = self.rnode[i]
                 let px = self.lo.x(n)
                 let py = self.lo.y(n)
@@ -465,7 +519,8 @@ struct Flare {
                 ui.card(px, py, pw, ph, self.ui.style.panel, self.ui.style, true)
                 self.rects.set(self.rid[i], Rect { x: px, y: py, w: pw, h: ph })   // for next frame's outside-press test
             } else if kind == _POPOVER_END {
-                set_layer(0)
+                if layers.len() > 0 { layer_cur = layers.remove_at(layers.len() - 1) }
+                set_layer(layer_cur)
             } else if kind == _OFFSET_BEGIN {
                 var dx = 0                              // shift the enclosed paint by (dx,dy); layout untouched
                 var dy = 0
@@ -992,6 +1047,775 @@ struct Flare {
     }
 
 
+    // _lift returns the draw layer one step ABOVE `cur`: the first overlay jumps to MODAL_LAYER (over all
+    // base content), and each overlay nested inside another (a submenu off a menu) climbs one more, so it
+    // stacks above its parent. The render loop pairs each lift with a pop on the matching _*_END.
+    fn _lift(self, cur: int) -> int {
+        if cur < MODAL_LAYER {
+            return MODAL_LAYER
+        }
+        return cur + 1
+    }
+
+
+    // ---- menu bar (File / Edit / View …) ----
+    // A top-of-window menu strip built on the same floating-node + overlay-gate machinery as the popover.
+    // menubar_begin/menubar_end bracket the bar; each menu()/menu_end() declares one dropdown. The bar
+    // FLOATS at (0,0) and takes no flow space, so the app offsets its body down by menubar_height().
+
+    // menubar_height is the on-screen height (px) of the bar strip — the amount to inset the app body.
+    fn menubar_height(self) -> int {
+        return self.ui.style.row_h
+    }
+
+
+    fn _mb_open(self) -> string {
+        match self.ss.get("__mb_open") {
+            case Some(v) { return v }
+            case None {}
+        }
+        return ""
+    }
+
+
+    // menubar_begin opens the full-width bar pinned to the top of the window. Fill it with menu() blocks.
+    fn menubar_begin(mut self) {
+        let st = self.ui.style
+        let h  = self.menubar_height()
+        // Snapshot the open menu + submenu for THIS frame. menu()/submenu() decide what to SHOW from the
+        // snapshot, while their click/hover handlers write __mb_open / __mb_sub for NEXT frame. So exactly
+        // one menu (and one submenu) is open per frame even mid hover-switch — no same-frame double-open,
+        // no two titles lit at once. Input this frame → state next frame, the immediate-mode discipline.
+        self.ss.set("__mb_open_f", self._mb_open())
+        var sub = ""
+        match self.ss.get("__mb_sub") {
+            case Some(v) { sub = v }
+            case None {}
+        }
+        self.ss.set("__mb_sub_f", sub)
+        let node = self.lo.open_float_at(ROW, START, CENTER, 2, st.pad / 2, 0, 0, screen_width(), h)
+        self._queue(node, _MENUBAR_BEGIN, "", "__menubar")
+    }
+
+
+    // menubar_end closes the bar and resolves a click/Esc OUTSIDE the open menu into a close (the caller's
+    // menu_item clicks close it directly; this catches presses on empty space and the Escape key).
+    fn menubar_end(mut self) {
+        self.lo.close()
+        var open = self._mb_open()
+        if open.len() > 0 {
+            if key_pressed(KEY_ESC) {                      // Esc closes the open menu
+                open = ""
+            } else if self.ui.down && !self.ui.was {       // a press this frame — close unless it landed in the
+                var inside = self.ui.my < self.menubar_height()   // bar itself…
+                match self.rects.get("mb/pop/" + open) {   // …or inside the open dropdown panel
+                    case Some(r) {
+                        if self.ui.mx >= r.x && self.ui.mx < r.x + r.w &&
+                           self.ui.my >= r.y && self.ui.my < r.y + r.h {
+                            inside = true
+                        }
+                    }
+                    case None {}
+                }
+                if !inside {
+                    open = ""
+                }
+            }
+            if open.len() == 0 {
+                self.ss.set("__mb_open", "")
+                self.ss.set("__mb_sub", "")
+            }
+        }
+    }
+
+
+    // menu draws one top-bar label and, when its menu is OPEN, drops the panel below it and returns true —
+    // the caller then declares the rows and closes with menu_end(). Click a label to toggle it; once any
+    // menu is open, moving onto another label switches to it (the familiar menu-bar hover-follow).
+    fn menu(mut self, label: string) -> bool {
+        let st  = self.ui.style
+        let id  = self.scope + "mb/" + label
+        let wid = self.ui.wid("mb/" + label)
+        let w   = measure_text(label, st.text_size) + st.pad * 2
+        let h   = self.menubar_height()
+        let open = self._mb_open()               // persistent state (this frame's clicks/hover write it → next frame)
+        var shown = ""                           // the snapshot: which menu is open FOR THIS FRAME
+        match self.ss.get("__mb_open_f") {
+            case Some(v) { shown = v }
+            case None {}
+        }
+        var ax = 0
+        var ay = h
+        var have = false
+        match self.rects.get(id) {
+            case Some(r) {
+                ax = r.x
+                ay = r.y + r.h
+                have = true
+                if self.ui.press(wid, r.x, r.y, r.w, r.h) {           // click a label → toggle its menu (next frame)
+                    if open == label {
+                        self.ss.set("__mb_open", "")
+                    } else {
+                        self.ss.set("__mb_open", label)
+                    }
+                    self.ss.set("__mb_sub", "")
+                } else if open.len() > 0 && open != label {           // a menu is open + hovering another → switch
+                    let over = self.ui.mx >= r.x && self.ui.mx < r.x + r.w &&
+                               self.ui.my >= r.y && self.ui.my < r.y + r.h
+                    if over {
+                        self.ss.set("__mb_open", label)
+                        self.ss.set("__mb_sub", "")
+                    }
+                }
+            }
+            case None {}
+        }
+        var kind = _MBLABEL
+        if shown == label {
+            kind = _MBLABEL_ON
+        }
+        let node = self.lo.leaf_fixed(w, h, 0)
+        self._queue(node, kind, label, id)
+        if shown == label && have {                                  // OPEN → drop the panel under the label
+            self._modal_was = true
+            self._in_modal  = true
+            self.si.set("__mb_depth", 0)
+            let pnode = self.lo.open_float_at(COL, START, STRETCH, 0, st.pad, ax, ay, 0, 0)
+            self._queue(pnode, _POPOVER_BEGIN, "", "mb/pop/" + label)
+            return true
+        }
+        return false
+    }
+
+
+    fn menu_end(mut self) {
+        self.lo.close()
+        self._queue(0, _POPOVER_END, "", "")
+        self._in_modal = false
+    }
+
+
+    // menu_item_accel is a menu row with a right-aligned keyboard hint ("New chat   ⌘N"). Behaves exactly
+    // like menu_item; the accel text is display-only (bind the real shortcut in your key handling).
+    fn menu_item_accel(mut self, txt: string, accel: string) -> bool {
+        let st  = self.ui.style
+        let id  = self.scope + "mia/" + txt
+        let wid = self.ui.wid("mia/" + txt)
+        let w   = measure_text(txt, st.text_size) + measure_text(accel, st.text_size) + st.pad * 5
+        let h   = st.row_h
+        var clicked = false
+        if !(self._modal && !self._in_modal) {
+            match self.rects.get(id) {
+                case Some(r) { clicked = self.ui.press(wid, r.x, r.y, r.w, r.h) }
+                case None {}
+            }
+        }
+        if clicked {
+            self.ss.set("__mb_open", "")
+            self.ss.set("__mb_sub", "")
+        } else if self.ui.hot == wid && self._si("__mb_depth", 0) == 0 {
+            self.ss.set("__mb_sub", "")                    // moving onto a plain root item collapses a submenu
+        }
+        // Pack label + accel as one tab-delimited string (the paint splits on the tab). Strip any tab FROM the
+        // label/accel first so the split always yields exactly two fields — a stray tab would otherwise leave
+        // the accel unrendered and raw tabs in the label.
+        let safe  = str.replace(txt, "\t", " ")
+        let sacc  = str.replace(accel, "\t", " ")
+        let node = self.lo.leaf(w, h, 0)
+        self._queue(node, _MENUITEM_A, safe + "\t" + sacc, id)
+        return clicked
+    }
+
+
+    // menu_sep is a thin inset rule that groups clusters of menu rows (Cut/Copy/Paste | Select All).
+    fn menu_sep(mut self) {
+        let node = self.lo.leaf(0, self.ui.style.pad + 2, 0)
+        self._queue(node, _MENU_SEP, "", "")
+    }
+
+
+    // submenu is a menu row that opens a NESTED menu to its right (a trailing "▸"). Hover it to expand; the
+    // nested panel stays while the cursor is over it or its rows. Fill it like a menu; close with submenu_end().
+    fn submenu(mut self, label: string) -> bool {
+        let st  = self.ui.style
+        let id  = self.scope + "sub/" + label
+        let wid = self.ui.wid("sub/" + label)
+        let w   = measure_text(label, st.text_size) + st.text_size / 2 + st.pad * 5   // + room for the drawn "▸"
+        let h   = st.row_h
+        var shown_sub = ""                       // the snapshot: which submenu is open FOR THIS FRAME
+        match self.ss.get("__mb_sub_f") {
+            case Some(v) { shown_sub = v }
+            case None {}
+        }
+        var ax = 0
+        var ay = 0
+        var have = false
+        if !(self._modal && !self._in_modal) {
+            match self.rects.get(id) {
+                case Some(r) {
+                    let _ = self.ui.press(wid, r.x, r.y, r.w, r.h)     // sets hot for the highlight
+                    if self.ui.mx >= r.x && self.ui.mx < r.x + r.w &&
+                       self.ui.my >= r.y && self.ui.my < r.y + r.h {
+                        self.ss.set("__mb_sub", label)                 // hover opens it NEXT frame (via the snapshot)
+                    }
+                    ax = r.x + r.w
+                    ay = r.y
+                    have = true
+                }
+                case None {}
+            }
+        }
+        let is_open = shown_sub == label && have
+        var kind = _SUBMENU
+        if is_open {
+            kind = _SUBMENU_ON
+        }
+        let node = self.lo.leaf(w, h, 0)
+        self._queue(node, kind, label, id)           // paint draws the "▸" as a vector triangle (font-independent)
+        if is_open {
+            self.si.set("__mb_depth", self._si("__mb_depth", 0) + 1)
+            let pnode = self.lo.open_float_at(COL, START, STRETCH, 0, st.pad, ax, ay, 0, 0)
+            self._queue(pnode, _POPOVER_BEGIN, "", "mb/sub/" + label)
+            return true
+        }
+        return false
+    }
+
+
+    fn submenu_end(mut self) {
+        self.lo.close()
+        self._queue(0, _POPOVER_END, "", "")
+        self.si.set("__mb_depth", self._si("__mb_depth", 0) - 1)
+    }
+
+
+    // ---- command palette (⌘K) ----
+    // command_palette is a self-contained fuzzy command launcher: a centred modal with a live filter field
+    // and a keyboard-navigable list of `commands` (their labels). The app owns an `open` bool and calls this
+    // only while open; the widget manages its own query + selection state and AUTO-FOCUSES the field on open,
+    // so you start typing without ever clicking it (it accepts input from its first painted frame, the same
+    // one-frame settle as every retained-rect widget here — imperceptible at any human typing speed).
+    // Returns the chosen command's index into `commands` when one is activated (Enter or click), -1 while it
+    // stays open with no choice, or -2 when dismissed (Esc / a press on the scrim). Any value != -1 is the
+    // caller's cue to close it: `let p = f.command_palette("cmdk", cmds); if p != -1 { open = false; if p >= 0 { run(cmds[p]) } }`.
+    fn command_palette(mut self, key: string, commands: [string]) -> int {
+        // Fresh-open detection: if this palette wasn't drawn last frame, it just (re)opened — reset the query
+        // and selection and focus the field (no click needed to start typing). self._frame is the monotonic
+        // per-frame counter; a gap > 1 means it was closed in between.
+        let last = self._si(key + ".seen", 0 - 100)
+        let fresh = self._frame - last > 1
+        self.si.set(key + ".seen", self._frame)
+        if fresh {
+            self.ss.set(key + ".q", "")
+            self.si.set(key + ".sel", 0)
+            self.ui.focus = self.ui.wid(key + "/q")     // auto-focus: drop the caret in the empty filter field
+            self.ui.buf = ""
+            self.ui.caret = 0
+            self.ui.sel_anchor = 0
+            self.ui.text_off = 0
+        }
+
+        var result = 0 - 1
+        let stay = self.modal_begin(key + "/modal", 520, 0)   // h = 0 → sizes to the field + list
+
+        // the live filter field
+        var q = ""
+        match self.ss.get(key + ".q") {
+            case Some(v) { q = v }
+            case None {}
+        }
+        let nq = self.text_field(key + "/q", q)
+        if nq != q {
+            self.si.set(key + ".sel", 0)                       // typing re-narrows → reset the highlight to the top
+        }
+        self.ss.set(key + ".q", nq)
+
+        // filter: case-insensitive substring; an empty query lists everything
+        let ql = str.to_lower(nq)
+        var matches: [int] = []
+        var i = 0
+        loop {
+            if i == commands.len() {
+                break
+            }
+            if ql.len() == 0 || str.contains(str.to_lower(commands[i]), ql) {
+                matches.append(i)
+            }
+            i = i + 1
+        }
+
+        // keyboard selection (↑/↓ with wrap), clamped to the current match set
+        var sel = self._si(key + ".sel", 0)
+        if matches.len() == 0 {
+            sel = 0
+        } else {
+            if key_pressed(KEY_DOWN_) {
+                sel = sel + 1
+            }
+            if key_pressed(KEY_UP_) {
+                sel = sel - 1
+            }
+            if sel < 0 {
+                sel = matches.len() - 1
+            }
+            if sel >= matches.len() {
+                sel = 0
+            }
+        }
+        self.si.set(key + ".sel", sel)
+
+        // Enter activates the highlighted match (submit() consumes the flag, so the composer never double-fires)
+        if self.submit() && matches.len() > 0 {
+            result = matches[sel]
+        }
+
+        // the list — rows scoped under `key` so their ids never collide with the app's own nav_items
+        let saved = self.scope
+        self.key(key)
+        if matches.len() == 0 {
+            self.text_muted("No matching commands")
+        } else {
+            var k = 0
+            loop {
+                if k == matches.len() {
+                    break
+                }
+                let ci = matches[k]
+                self.row(START, CENTER)                       // nav_item grows to WIDTH inside a row
+                if self.nav_item(commands[ci], k == sel) {
+                    result = ci
+                }
+                self.end()
+                k = k + 1
+            }
+        }
+        self.scope = saved
+        self.ui.set_scope(saved)
+
+        self.modal_end()
+
+        if key_pressed(KEY_ESC) {
+            return 0 - 2
+        }
+        if !stay {
+            return 0 - 2
+        }
+        return result
+    }
+
+
+    // ---- composer typeahead (slash-commands / @-mentions) ----
+    // typeahead is an anchored completion popup for a text field. The caller detects a trigger + partial
+    // `query` in its field (e.g. text after a "/" or "@") and passes candidate labels; this filters them
+    // (case-insensitive substring), lists them keyboard-navigably in a card ABOVE the field whose key is
+    // `anchor`, and returns the accepted candidate's index into `candidates` (Enter / Tab / click), -1 while
+    // open with no accept, or -2 when dismissed (Esc). It does NOT gate the field — you keep typing while it
+    // filters — and it SWALLOWS the Enter it accepts on (self._submit) so a composer behind it won't also send.
+    // The caller owns the text: on a >= 0 return it applies the completion (run a command, insert a mention).
+    fn typeahead(mut self, key: string, anchor: string, query: string, candidates: [string]) -> int {
+        let st = self.ui.style
+        let ql = str.to_lower(query)
+        var matches: [int] = []
+        var i = 0
+        loop {
+            if i == candidates.len() {
+                break
+            }
+            if ql.len() == 0 || str.contains(str.to_lower(candidates[i]), ql) {
+                matches.append(i)
+            }
+            i = i + 1
+        }
+        if matches.len() == 0 {
+            // Nothing matches → no popup, and (intentionally) DON'T swallow Enter: with no list showing the
+            // field is just normal text, so Enter sends — this is what lets a "/"-prefixed message (e.g. a
+            // path like "/etc/hosts", or an unknown "/xyz") be sent as text rather than trapping the caret.
+            return 0 - 1
+        }
+        // selection state, reset the first frame the popup (re)appears (frame gap > 1, like the palette)
+        let last = self._si(key + ".seen", 0 - 100)
+        let fresh = self._frame - last > 1
+        self.si.set(key + ".seen", self._frame)
+        var sel = self._si(key + ".sel", 0)
+        if fresh {
+            sel = 0
+        }
+        if key_pressed(KEY_DOWN_) {
+            sel = sel + 1
+        }
+        if key_pressed(KEY_UP_) {
+            sel = sel - 1
+        }
+        if sel < 0 {
+            sel = matches.len() - 1
+        }
+        if sel >= matches.len() {
+            sel = 0
+        }
+        self.si.set(key + ".sel", sel)
+        if key_pressed(KEY_ESC) {
+            return 0 - 2
+        }
+        var result = 0 - 1
+        if key_pressed(KEY_ENTER) || key_pressed(KEY_TAB) {
+            result = matches[sel]
+            self._submit = false                     // swallow Enter here so the composer's submit() won't fire
+        }
+        // Position a floating card relative to the anchor field. We need the field's LAST-frame rect; if it
+        // isn't known yet (the field was only just added), skip drawing this frame — the keyboard accept above
+        // still returns, and the popup appears next frame once the rect exists (no first-frame top-left flash).
+        var fx = 0
+        var fy = 0
+        var fw = 260
+        var fh = 0
+        var have = false
+        match self.rects.get(anchor) {
+            case Some(r) {
+                fx = r.x
+                fy = r.y
+                fw = r.w
+                fh = r.h
+                have = true
+            }
+            case None {}
+        }
+        if have {
+            let ph = matches.len() * st.row_h + st.pad * 2
+            var py = fy - ph - st.pad / 2             // default: just ABOVE the field (a composer sits at the bottom)
+            if py < 0 {
+                py = fy + fh + st.pad / 2             // not enough room above → drop it BELOW the field instead
+            }
+            // A NON-gating popover: draw its raised card + rows (reusing the popover paint/layer) but WITHOUT the
+            // modal gate, so the field behind stays editable while the list filters live.
+            let pnode = self.lo.open_float_at(COL, START, STRETCH, 0, st.pad, fx, py, fw, 0)
+            self._queue(pnode, _POPOVER_BEGIN, "", key + ".pop")
+            let save = self.scope
+            self.key(key)
+            var k = 0
+            loop {
+                if k == matches.len() {
+                    break
+                }
+                let ci = matches[k]
+                self.row(START, CENTER)
+                if self.nav_item(candidates[ci], k == sel) {
+                    result = ci
+                }
+                self.end()
+                k = k + 1
+            }
+            self.scope = save
+            self.ui.set_scope(save)
+            self._queue(0, _POPOVER_END, "", "")
+            self.lo.close()
+        }
+        return result
+    }
+
+
+    // ---- checkbox / slider / dropdown ----
+
+    // checkbox is a pill toggle with a trailing label — a boolean setting (Dark mode, Send on Enter …).
+    // Pass the current value, get the (maybe flipped) value back: `on = f.checkbox("dark", "Dark mode", on)`.
+    // Content-sized (leaf_fixed), so it doesn't span a stretch column.
+    fn checkbox(mut self, key: string, label: string, on: bool) -> bool {
+        let st  = self.ui.style
+        let id  = self.scope + "cb/" + key
+        let wid = self.ui.wid("cb/" + key)
+        let h   = st.row_h
+        let tw  = h + h / 2                                        // the pill track width
+        let w   = tw + st.pad + measure_text(label, st.text_size)
+        var result = on
+        if !(self._modal && !self._in_modal) {
+            match self.rects.get(id) {
+                case Some(r) {
+                    if self.ui.press(wid, r.x, r.y, r.w, r.h) {
+                        result = !on
+                    }
+                }
+                case None {}
+            }
+        }
+        var kind = _CHECKBOX
+        if result {
+            kind = _CHECKBOX_ON
+        }
+        let node = self.lo.leaf_fixed(w, h, 0)
+        self._queue(node, kind, label, id)
+        return result
+    }
+
+
+    // slider is a horizontal value track with a draggable knob over the integer range [lo, hi]. Feed the
+    // current value, get the dragged value back: `v = f.slider("zoom", v, 60, 220)`. Fills a stretch parent's
+    // width (like a text field), so give it a sized row/strut if you want it narrower than the column.
+    fn slider(mut self, key: string, value: int, lo: int, hi: int) -> int {
+        let st  = self.ui.style
+        let id  = self.scope + "sl/" + key
+        let wid = self.ui.wid("sl/" + key)
+        let h   = st.row_h
+        var v = value
+        if !(self._modal && !self._in_modal) {
+            match self.rects.get(id) {
+                case Some(r) {
+                    let _ = self.ui.press(wid, r.x, r.y, r.w, r.h)     // hot/active side effects (active = held)
+                    if self.ui.active == wid && r.w > 0 {
+                        var t = self.ui.mx - r.x
+                        if t < 0 {
+                            t = 0
+                        }
+                        if t > r.w {
+                            t = r.w
+                        }
+                        v = lo + (t * (hi - lo) + r.w / 2) / r.w       // map cursor→[lo,hi], rounded (no dead zones)
+                    }
+                }
+                case None {}
+            }
+        }
+        if v < lo {
+            v = lo
+        }
+        if v > hi {
+            v = hi
+        }
+        var permille = 0
+        if hi > lo {
+            permille = (v - lo) * 1000 / (hi - lo)                     // fill fraction for the paint, carried as text
+        }
+        let node = self.lo.leaf(200, h, 0)                           // 200px intrinsic; STRETCH grows it to fill
+        self._queue(node, _SLIDER, "{permille}", id)
+        return v
+    }
+
+
+    // dropdown is a collapsed single-choice selector: a box showing the current option + a "▾" chevron that,
+    // on click, drops a popover list of `options`; picking one sets it and closes. Feed the selected index,
+    // get the (maybe changed) index back: `i = f.dropdown("model", opts, i)`. The compact alternative to
+    // `segmented` when the choices are many or long. Content-sized to the WIDEST option (so it doesn't jump).
+    fn dropdown(mut self, key: string, options: [string], selected: int) -> int {
+        let st  = self.ui.style
+        let id  = self.scope + "dd/" + key
+        let wid = self.ui.wid("dd/" + key)
+        var maxw = 0
+        var i = 0
+        loop {
+            if i == options.len() {
+                break
+            }
+            let ow = measure_text(options[i], st.text_size)
+            if ow > maxw {
+                maxw = ow
+            }
+            i = i + 1
+        }
+        let w = maxw + st.text_size / 2 + st.pad * 4                  // room for the drawn "▾" chevron
+        let h = st.row_h
+        var result = selected
+        var open = false
+        match self.ss.get(id + ".open") {
+            case Some(v) { open = v == "1" }
+            case None {}
+        }
+        var bx = 0
+        var bty = 0
+        var by = 0
+        var have = false
+        if !(self._modal && !self._in_modal) {
+            match self.rects.get(id) {
+                case Some(r) {
+                    if self.ui.press(wid, r.x, r.y, r.w, r.h) {       // click the box → toggle the list
+                        open = !open
+                        if open {
+                            self.ss.set(id + ".open", "1")
+                        } else {
+                            self.ss.set(id + ".open", "")
+                        }
+                    }
+                    bx = r.x
+                    bty = r.y
+                    by = r.y + r.h
+                    have = true
+                }
+                case None {}
+            }
+        }
+        var lbl = ""
+        if selected >= 0 && selected < options.len() {
+            lbl = options[selected]
+        }
+        let node = self.lo.leaf_fixed(w, h, 0)
+        self._queue(node, _DROPDOWN, lbl, id)
+        if open && have {                                            // OPEN → a popover list under the box
+            let was_in_modal = self._in_modal                        // may already be inside a modal (settings)
+            self._modal_was = true
+            self._in_modal  = true
+            let pnode = self.lo.open_float_at(COL, START, STRETCH, 0, st.pad, bx, by, w, 0)
+            self._queue(pnode, _POPOVER_BEGIN, "", id + ".pop")
+            let save = self.scope
+            self.key(id)                                            // scope the option rows so ids stay unique
+            var j = 0
+            loop {
+                if j == options.len() {
+                    break
+                }
+                if self.menu_item(options[j]) {
+                    result = j
+                    self.ss.set(id + ".open", "")                   // pick closes the list
+                }
+                j = j + 1
+            }
+            self.scope = save
+            self.ui.set_scope(save)
+            self._queue(0, _POPOVER_END, "", "")
+            self.lo.close()
+            self._in_modal = was_in_modal                           // RESTORE — don't clobber an enclosing modal
+            // a press OUTSIDE the box and the list closes it (the box toggles itself; this catches elsewhere)
+            if self.ui.down && !self.ui.was {
+                var inside = self.ui.mx >= bx && self.ui.mx < bx + w &&
+                             self.ui.my >= bty && self.ui.my < by       // box's real last-frame span [bty, by)
+                match self.rects.get(id + ".pop") {
+                    case Some(r) {
+                        if self.ui.mx >= r.x && self.ui.mx < r.x + r.w &&
+                           self.ui.my >= r.y && self.ui.my < r.y + r.h {
+                            inside = true
+                        }
+                    }
+                    case None {}
+                }
+                if !inside {
+                    self.ss.set(id + ".open", "")
+                }
+            }
+        }
+        return result
+    }
+
+
+    // ---- tabs ----
+    // tabs draws a horizontal strip of closeable tab chips (browser / editor style). Click a chip to SWITCH
+    // (the active one is raised to the panel colour with an accent underline); click its trailing "×" to CLOSE
+    // it; DRAG a chip left/right to REORDER. It returns a TabResult for this frame — `active` (the maybe-changed
+    // selection), `closed` (the ×'d index, else -1), and `moved_from`/`moved_to` (a completed drag-reorder, else
+    // -1). The CALLER owns the list: on `closed`/`moved_*` it edits its own array; the chips FLIP-animate to
+    // their new slots (each keyed by its label, so the animation follows the tab, not the position).
+    fn tabs(mut self, key: string, labels: [string], active: int) -> TabResult {
+        let st = self.ui.style
+        let scope0 = self.scope
+        let h = st.row_h
+        let xzone = st.text_size + st.pad                 // the trailing "×" hit/paint zone
+        var res_active = active
+        var res_closed = 0 - 1
+        var res_from = 0 - 1
+        var res_to = 0 - 1
+
+        // drag state: which chip is being dragged, the grab x, and whether it has moved past the click threshold
+        var drag = self._si(key + ".drag", 0 - 1)
+        let grabx = self._si(key + ".grabx", 0)
+        var moved = self._si(key + ".moved", 0) == 1
+        let mx = self.ui.mx
+        let live = !(self._modal && !self._in_modal)
+        if drag >= 0 && self.ui.down && (mx - grabx > 6 || grabx - mx > 6) {
+            moved = true
+            self.si.set(key + ".moved", 1)
+        }
+
+        self.row(START, CENTER)
+        var i = 0
+        loop {
+            if i == labels.len() {
+                break
+            }
+            // Hit-test ids are keyed by INDEX (never the label) so DUPLICATE labels can't collide — a click,
+            // close, or drag always targets the right chip. FLIP identity below stays label-keyed (so the
+            // animation follows a tab across a reorder — that path wants unique labels for a clean slide).
+            let id   = scope0 + "{key}/tab/{i}"
+            let bwid = self.ui.wid("{key}/tab/{i}")
+            let xwid = self.ui.wid("{key}/tabx/{i}")
+            let cw = measure_text(labels[i], st.text_size) + st.pad * 2 + xzone
+            if live {
+                match self.rects.get(id) {
+                    case Some(r) {
+                        let xz_x = r.x + r.w - xzone
+                        if self.ui.press(xwid, xz_x, r.y, xzone, r.h) {          // the × zone → close this tab
+                            res_closed = i
+                        }
+                        if self.ui.pressed_down(bwid, r.x, r.y, r.w - xzone, r.h) {   // down-edge → latch a drag
+                            drag = i
+                            self.si.set(key + ".drag", i)
+                            self.si.set(key + ".grabx", mx)
+                            self.si.set(key + ".moved", 0)
+                            moved = false
+                        }
+                    }
+                    case None {}
+                }
+            }
+            self.animate_layout(scope0 + key + "/flip/" + labels[i])   // FLIP: slide to the new slot on any change
+            var dx = 0
+            if drag == i && moved {
+                dx = mx - grabx                                        // the dragged chip follows the cursor
+            }
+            if dx != 0 {
+                self.at(to_float(dx), 0.0)
+            }
+            var kind = _TAB
+            if i == active {
+                kind = _TAB_ON
+            }
+            let node = self.lo.leaf_fixed(cw, h, 0)
+            self._queue(node, kind, labels[i], id)
+            if dx != 0 {
+                self.end_at()
+            }
+            self.end_animate_layout()
+            i = i + 1
+        }
+        self.end()
+
+        // resolve the drag on release: a plain click (no move) SWITCHES; a moved drag REORDERS to the slot whose
+        // midpoint the cursor passed.
+        if drag >= 0 && !self.ui.down {
+            if moved {
+                var target = 0
+                var j = 0
+                loop {
+                    if j == labels.len() {
+                        break
+                    }
+                    match self.rects.get(scope0 + "{key}/tab/{j}") {
+                        case Some(r) {
+                            if mx > r.x + r.w / 2 {
+                                target = j + 1
+                            }
+                        }
+                        case None {}
+                    }
+                    j = j + 1
+                }
+                if target > drag {
+                    target = target - 1                    // account for the dragged tab leaving its old slot
+                }
+                if target < 0 {
+                    target = 0
+                }
+                if target >= labels.len() {
+                    target = labels.len() - 1
+                }
+                if target != drag {
+                    res_from = drag
+                    res_to = target
+                }
+            } else {
+                res_active = drag
+            }
+            self.si.set(key + ".drag", 0 - 1)
+            self.si.set(key + ".moved", 0)
+        }
+        return TabResult { active: res_active, closed: res_closed, moved_from: res_from, moved_to: res_to }
+    }
+
+
     // menu_item is one selectable, full-width row inside a popover; returns true when clicked. Its
     // intrinsic width sizes the popover (the widest item wins) and STRETCH makes every item that width.
     fn menu_item(mut self, txt: string) -> bool {
@@ -1005,6 +1829,12 @@ struct Flare {
                 case Some(r) { clicked = self.ui.press(wid, r.x, r.y, r.w, r.h) }
                 case None {}
             }
+        }
+        if clicked {                                  // a bar/context menu row → dismiss the menu on click
+            self.ss.set("__mb_open", "")
+            self.ss.set("__mb_sub", "")
+        } else if self.ui.hot == wid && self._si("__mb_depth", 0) == 0 {
+            self.ss.set("__mb_sub", "")               // moving onto a plain root item collapses a submenu
         }
         let node = self.lo.leaf(w, h, 0)
         self._queue(node, _MENUITEM, txt, id)
@@ -1304,7 +2134,9 @@ struct Flare {
                 gcol = st.ink
             }
             let gsz = st.text_size
-            draw_text("✕", cx + (cw - measure_text("✕", gsz)) / 2, py + (bar - gsz) / 2, gsz, gcol)
+            // "×" (U+00D7, in the font's Latin-1 subset) — NOT "✕" (U+2715, geometric-shapes block), which
+            // tofus to "?" in the embedded body font (same reason menu/dropdown chevrons are drawn, not typed).
+            draw_text("×", cx + (cw - measure_text("×", gsz)) / 2, py + (bar - gsz) / 2, gsz, gcol)
         }
         // title — a single panel draws its name; a tab group draws a chip per tab (active raised, click to switch).
         if tree.dk_tabs[i].len() <= 1 {
@@ -1897,6 +2729,7 @@ struct Flare {
     fn _btn(mut self, txt: string, kind: int, fill: bool) -> bool {
         let id = self.scope + txt
         let wid = self.ui.wid(txt)
+        self._last_wid = wid                    // so a following tooltip() / right_clicked() can anchor here
         var padmul = 3
         if kind == _GHOST {            // ghost buttons are compact (a tighter hit/paint box)
             padmul = 2
@@ -1971,6 +2804,7 @@ struct Flare {
     fn nav_item(mut self, txt: string, active: bool) -> bool {
         let id = self.scope + "nav/" + txt
         let wid = self.ui.wid("nav/" + txt)
+        self._last_wid = wid                    // so a following tooltip() / right_clicked() can anchor here
         let h = self.ui.style.row_h
         var clicked = false
         var w_last = 0                              // last frame's painted WIDTH — drives ellipsis-to-fit
@@ -2780,6 +3614,67 @@ struct Flare {
     }
 
 
+    // clear_field resets the FOCUSED text field's live edit buffer to empty — call it after you've
+    // programmatically replaced the field's text (e.g. a typeahead completion consumed the input), so the
+    // on-screen field matches the new value instead of the stale keystrokes still held in the editor buffer.
+    fn clear_field(mut self) {
+        self.ui.buf = ""
+        self.ui.caret = 0
+        self.ui.sel_anchor = 0
+        self.ui.text_off = 0
+    }
+
+
+    // ---- right-click / tooltip ----
+
+    // right_click reports the RIGHT mouse button's down-edge this frame (pressed now, up last frame) — a
+    // right-click anywhere. Pair with a hit-test, or use right_clicked() to scope it to the last widget.
+    fn right_click(self) -> bool {
+        return self._rdown && !self._rwas
+    }
+
+
+    // right_clicked reports a right-click on the MOST-RECENTLY-drawn interactive widget (a button / nav_item /
+    // tab): call it immediately after that widget. True once, on the down-edge, while the cursor is over it —
+    // the hook for a right-click context menu (open a popover at the cursor). Returns false while a modal gates.
+    fn right_clicked(self) -> bool {
+        if self._modal && !self._in_modal {
+            return false
+        }
+        return self.right_click() && self._last_wid != 0 && self.ui.hot == self._last_wid
+    }
+
+
+    // tooltip shows a small hint near the cursor after the MOST-RECENTLY-drawn widget has been hovered for a
+    // short delay (~0.4s). Call it right after the widget: `if f.ghost_button("⧉") {…}  f.tooltip("Copy")`.
+    // A single timer suffices (only one widget is hovered at a time); it rests on the same floating card as
+    // the popover, on a raised layer, and never gates the UI.
+    fn tooltip(mut self, text: string) {
+        if self._last_wid == 0 || self.ui.hot != self._last_wid {
+            return
+        }
+        var age = 1
+        if self._si("__tip_wid", 0) == self._last_wid {
+            age = self._si("__tip_age", 0) + 1
+        }
+        self.si.set("__tip_wid", self._last_wid)
+        self.si.set("__tip_age", age)
+        if age < 24 {                                     // ~0.4s dwell before it appears
+            return
+        }
+        let st = self.ui.style
+        let tx = self.ui.mx + 14
+        let ty = self.ui.my + 18
+        let pnode = self.lo.open_float_at(COL, START, START, 0, st.pad, tx, ty, 0, 0)
+        self._queue(pnode, _POPOVER_BEGIN, "", "__tip")
+        let w = measure_text(text, st.text_size)
+        let lnode = self.lo.leaf_fixed(w, st.text_size + st.pad / 2, 0)
+        self._queue(lnode, _LABEL, text, "")
+        self._queue(0, _POPOVER_END, "", "")
+        self.lo.close()
+    }
+
+
     // _queue records a widget to paint after the solve.
     fn _queue(mut self, node: int, kind: int, text: string, id: string) {
         self.rnode.append(node)
@@ -2915,6 +3810,138 @@ struct Flare {
                 col = st.accent_ink
             }
             draw_text(text, x + st.pad, self._ty(y, h, st.text_size), st.text_size, col)
+        } else if kind == _MBLABEL || kind == _MBLABEL_ON {
+            // A top-bar menu label: normal ink over a hover fill; the OPEN menu carries a stronger (pressed)
+            // fill so the active menu reads as pinned down while its dropdown is showing.
+            let mw = hash(id)
+            if kind == _MBLABEL_ON {
+                fill_round(x, y, w, h, st.radius, st.pressed, 255)
+            } else if self.ui.hot == mw {
+                fill_round(x, y, w, h, st.radius, st.hover, 255)
+            }
+            let tw = measure_text(text, st.text_size)
+            draw_text(text, x + (w - tw) / 2, self._ty(y, h, st.text_size), st.text_size, st.ink)
+        } else if kind == _MENUITEM_A {
+            // A menu row with a right-aligned accelerator; text is "label\taccel". The accel stays muted even
+            // on the accent hover (a hint, not an action), except it flips to accent_ink for contrast there.
+            let mw = hash(id)
+            var col  = st.ink
+            var acol = st.muted_ink
+            if self.ui.hot == mw {
+                fill_round(x, y, w, h, 6, st.accent, 255)
+                col  = st.accent_ink
+                acol = st.accent_ink
+            }
+            let parts = text.split("\t")
+            var lbl = text
+            var acc = ""
+            if parts.len() == 2 {
+                lbl = parts[0]
+                acc = parts[1]
+            }
+            let ty = self._ty(y, h, st.text_size)
+            draw_text(lbl, x + st.pad, ty, st.text_size, col)
+            let aw = measure_text(acc, st.text_size)
+            draw_text(acc, x + w - st.pad - aw, ty, st.text_size, acol)
+        } else if kind == _SUBMENU || kind == _SUBMENU_ON {
+            // A submenu row (label + a trailing "▸" disclosure): highlit on hover OR while its nested menu is open.
+            let mw = hash(id)
+            var col = st.ink
+            if kind == _SUBMENU_ON || self.ui.hot == mw {
+                fill_round(x, y, w, h, 6, st.accent, 255)
+                col = st.accent_ink
+            }
+            draw_text(text, x + st.pad, self._ty(y, h, st.text_size), st.text_size, col)
+            let cr = st.text_size / 4
+            self._tri_right(x + w - st.pad - cr, y + h / 2, cr, col)   // drawn "▸" (font-independent)
+        } else if kind == _MENU_SEP {
+            fill_round(x + st.pad, y + h / 2, w - st.pad * 2, 1, 0, st.border, 255)   // an inset grouping rule
+        } else if kind == _CHECKBOX || kind == _CHECKBOX_ON {
+            // a pill toggle (accent track + knob when ON) with a trailing label
+            let cw = hash(id)
+            let on = kind == _CHECKBOX_ON
+            let tw = h + h / 2
+            let th = h - 12
+            let ty = y + (h - th) / 2
+            var track = st.track
+            if on {
+                track = st.accent
+            } else if self.ui.hot == cw {
+                track = st.hover
+            }
+            fill_round(x, ty, tw, th, th / 2, track, 255)
+            let kr = th / 2 - 2
+            let cyk = ty + th / 2
+            var kx = x + th / 2
+            if on {
+                kx = x + tw - th / 2
+            }
+            fill_round(kx - kr, cyk - kr, kr * 2, kr * 2, kr, st.accent_ink, 255)
+            draw_text(text, x + tw + st.pad, self._ty(y, h, st.text_size), st.text_size, st.ink)
+        } else if kind == _SLIDER {
+            // a value track + draggable knob; `text` carries the fill fraction as permille (0..1000)
+            let sw = hash(id)
+            let permille = to_int(parse_float(text))
+            var fillw = w * permille / 1000
+            if fillw < 0 {
+                fillw = 0
+            }
+            if fillw > w {
+                fillw = w
+            }
+            let th = 6
+            let cyk = y + h / 2
+            fill_round(x, cyk - th / 2, w, th, th / 2, st.track, 255)
+            if fillw > 0 {
+                fill_round(x, cyk - th / 2, fillw, th, th / 2, st.accent, 255)
+            }
+            let kr = 9
+            let kx = x + fillw
+            var ring = st.border
+            if self.ui.active == sw {
+                ring = st.accent
+            } else if self.ui.hot == sw {
+                ring = ui.shade(st.accent, 20)
+            }
+            fill_round(kx - kr, cyk - kr, kr * 2, kr * 2, kr, st.accent_ink, 255)
+            stroke_round(kx - kr, cyk - kr, kr * 2, kr * 2, kr, 1, ring, 200)
+        } else if kind == _DROPDOWN {
+            // a collapsed selector box: bordered surface, left label, right "▾" chevron; hover fill
+            let dw = hash(id)
+            var fill = st.panel
+            if self.ui.active == dw {
+                fill = st.pressed
+            } else if self.ui.hot == dw {
+                fill = st.hover
+            }
+            ui.card(x, y, w, h, fill, st, true)
+            let ty = self._ty(y, h, st.text_size)
+            let cr = st.text_size / 4                                  // chevron half-extent
+            draw_text(self._fit_text(text, w - cr * 2 - st.pad * 3), x + st.pad, ty, st.text_size, st.ink)
+            self._tri_down(x + w - st.pad - cr, y + h / 2, cr, st.muted_ink)   // drawn "▾" (font-independent)
+        } else if kind == _TAB || kind == _TAB_ON {
+            // a tab chip: label + a trailing "×" close zone. Active = panel fill + accent underline; inactive =
+            // bar fill (hover-lit). "×" is U+00D7 (in the font's Latin-1 subset — renders, unlike "✕", OFI-170).
+            let on = kind == _TAB_ON
+            let bwid = hash(id)
+            let xzone = st.text_size + st.pad
+            var fill = st.bar
+            var ink = st.muted_ink
+            if on {
+                fill = st.panel
+                ink = st.ink
+            } else if self.ui.hot == bwid {
+                fill = st.hover
+                ink = st.ink
+            }
+            fill_round(x, y, w, h, st.radius, fill, 255)
+            let ty = self._ty(y, h, st.text_size)
+            draw_text(self._fit_text(text, w - xzone - st.pad), x + st.pad, ty, st.text_size, ink)
+            let xw = measure_text("×", st.text_size)
+            draw_text("×", x + w - xzone / 2 - xw / 2, ty, st.text_size, st.muted_ink)
+            if on {
+                fill_round(x + st.pad, y + h - 2, w - st.pad * 2, 2, 0, st.accent, 255)   // active underline
+            }
         }
     }
 
@@ -2927,6 +3954,35 @@ struct Flare {
     // its vertical text placement through here, so they all centre identically and can't drift apart again.
     fn _ty(self, boxy: int, h: int, size: int) -> int {
         return boxy + (h - text_line_height(size)) / 2
+    }
+
+
+    // _tri_down / _tri_right paint a small solid triangle from stacked 1px bars, centred on (cx, cy) with
+    // half-extent `r`. Font-INDEPENDENT — the embedded body font's subset omits the geometric-shape glyphs
+    // (▾ ▸ render as tofu), so menu/dropdown chevrons are drawn, not typed. `r ≈ text_size/4` reads well.
+    fn _tri_down(self, cx: int, cy: int, r: int, col: int) {
+        var i = 0
+        loop {
+            if i > r {
+                break
+            }
+            let ww = (r - i) * 2 + 1                       // widest at the top row, narrowing to a point
+            fill_round(cx - (r - i), cy - r + i, ww, 1, 0, col, 255)
+            i = i + 1
+        }
+    }
+
+
+    fn _tri_right(self, cx: int, cy: int, r: int, col: int) {
+        var i = 0
+        loop {
+            if i > r {
+                break
+            }
+            let hh = (r - i) * 2 + 1                       // tallest at the left column, narrowing to a point
+            fill_round(cx - r + i, cy - (r - i), 1, hh, 0, col, 255)
+            i = i + 1
+        }
     }
 
 
@@ -3000,6 +4056,9 @@ fn new() -> Flare {
         pox: 0,
         poy: 0,
         _submit: false,
+        _rdown: false,
+        _rwas: false,
+        _last_wid: 0,
         mono: -1,
         italic: -1,
         zoom: 100,

@@ -126,7 +126,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.ember",
-          "match": "\\b(print|println|concat|hash|abs|ceil|floor|round|sqrt|pow|parse_float|char_code|from_char_code|byte_slice|read_line|read_file|write_file|random|args|env|exit|channel|send|recv|close)\\b(?=\\s*\\()"
+          "match": "\\b(print|println|concat|hash|abs|ceil|floor|round|sqrt|pow|parse_float|char_code|from_char_code|byte_slice|from_bytes|read_line|read_file|write_file|random|args|env|exit|channel|send|recv|close)\\b(?=\\s*\\()"
         },
         {
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*\\()",

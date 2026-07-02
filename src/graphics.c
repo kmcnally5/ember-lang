@@ -1192,6 +1192,11 @@ int ember_gfx_mouse_down(void) {
 }
 
 
+int ember_gfx_mouse_right_down(void) {
+    return IsMouseButtonDown(MOUSE_BUTTON_RIGHT) ? 1 : 0;
+}
+
+
 
 
 
@@ -1349,6 +1354,40 @@ void ember_gfx_clipboard_set(const char *text) {
 const char *ember_gfx_clipboard_get(void) {
     const char *p = GetClipboardText();   // owned by GLFW, valid until the next call — copy now
     return p != NULL ? p : "";
+}
+
+
+// dropped_files() -> the paths of files dragged onto the window THIS frame, '\n'-joined (empty if none).
+// The result is owned here (freed on the NEXT call, like clipboard_get's GLFW buffer) — the VM copies it now.
+const char *ember_gfx_dropped_files(void) {
+    static char *buf = NULL;
+    free(buf);                             // release the previous result (free(NULL) is a no-op)
+    buf = NULL;
+    if (!IsFileDropped()) {
+        return "";
+    }
+    FilePathList list = LoadDroppedFiles();
+    size_t total = 1;                      // trailing '\0'
+    for (unsigned int i = 0; i < list.count; i++) {
+        total += strlen(list.paths[i]) + 1;   // path + its separator ('\n' or the final '\0')
+    }
+    buf = (char *)malloc(total);
+    if (buf == NULL) {
+        UnloadDroppedFiles(list);
+        return "";
+    }
+    size_t off = 0;
+    for (unsigned int i = 0; i < list.count; i++) {
+        if (i > 0) {
+            buf[off++] = '\n';
+        }
+        size_t l = strlen(list.paths[i]);
+        memcpy(buf + off, list.paths[i], l);
+        off += l;
+    }
+    buf[off] = '\0';
+    UnloadDroppedFiles(list);
+    return buf;
 }
 
 

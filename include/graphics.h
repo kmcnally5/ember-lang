@@ -27,6 +27,7 @@ int  ember_gfx_key_down(int keycode);          // 1 while the key is held
 int  ember_gfx_mouse_x(void);
 int  ember_gfx_mouse_y(void);
 int  ember_gfx_mouse_down(void);               // 1 while the left button is held
+int  ember_gfx_mouse_right_down(void);         // 1 while the right button is held (context menus)
 int  ember_gfx_measure_text(const char *text, int size);  // pixel width
 int  ember_gfx_text_line_height(int size);                // font line height in px at logical size
 int  ember_gfx_char_pressed(void);             // next typed char this frame, 0 if none
@@ -37,6 +38,7 @@ void ember_gfx_set_font(int id);               // select the font slot for follo
 void ember_gfx_set_cursor(int shape);          // OS mouse cursor for this frame (0=default,1=resize-EW,2=resize-NS,3=hand,4=I-beam)
 void ember_gfx_clipboard_set(const char *text);// copy text to the system clipboard
 const char *ember_gfx_clipboard_get(void);     // read the system clipboard (borrowed, copy now)
+const char *ember_gfx_dropped_files(void);     // '\n'-joined paths dropped on the window this frame (copy now)
 int  ember_gfx_screen_width(void);             // current window width (resizable)
 int  ember_gfx_screen_height(void);            // current window height
 void ember_gfx_set_layer(int z);               // z-layer for the draw commands that follow

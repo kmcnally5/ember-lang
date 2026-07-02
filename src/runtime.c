@@ -2153,6 +2153,26 @@ Value em_native(EmberRt *ctx, int nid, int argc, const Value *args) {
             if (n > 0) { memcpy(out->chars, s->chars + lo, n); }
             return OBJ_VAL(out);
         }
+        case NATIVE_FROM_BYTES: {
+            // from_bytes(bytes) -> a string whose raw buffer is EXACTLY the [u8] array's bytes. The inverse
+            // of .bytes(): no UTF-8 re-encoding (unlike from_char_code), so it can build ANY byte sequence
+            // — the primitive an Ember-side binary serializer needs (docs/design/bytecode-container.md).
+            // A [u8] array packs one byte per element (AEK_U8), copied directly; any other integer packing
+            // is read element-by-element and masked to a byte, so the builtin is representation-robust.
+            ObjArray *a = argc >= 1 ? AS_ARRAY(args[0]) : NULL;
+            size_t n = a ? a->length : 0;
+            ObjString *out = make_string(ctx, n);
+            if (n > 0) {
+                if (a->elem_kind == AEK_U8) {
+                    memcpy(out->chars, a->data, n);
+                } else {
+                    for (size_t i = 0; i < n; i++) {
+                        out->chars[i] = (char)(AS_INT(em_index(ctx, OBJ_VAL(a), INT_VAL((int64_t)i))) & 0xFF);
+                    }
+                }
+            }
+            return OBJ_VAL(out);
+        }
 #ifndef EMBER_FREESTANDING
         case NATIVE_PARSE_FLOAT: {
             const char *str = argc >= 1 ? AS_CSTRING(args[0]) : "";

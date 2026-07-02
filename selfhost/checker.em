@@ -96,14 +96,15 @@ fn prim_type(name: string) -> int {
 // names used as functions (int(x), u8(x), ...). A call target matching one of these is never "undefined".
 fn builtin_names() -> [string] {
     return ["print", "println", "concat", "hash", "abs", "ceil", "floor", "round", "sqrt", "pow",
-        "parse_float", "char_code", "from_char_code", "byte_slice", "read_line", "read_file", "write_file",
+        "parse_float", "char_code", "from_char_code", "byte_slice", "from_bytes", "read_line", "read_file", "write_file",
         "random", "args", "env", "exit", "channel", "send", "recv", "close", "to_int", "to_float",
         "draw_rect", "draw_text", "fill_circle", "fill_grad", "fill_round", "stroke_round", "shadow",
         "measure_text", "measure_misses", "text_line_height", "load_font", "set_font", "set_alpha",
         "set_layer", "set_cursor", "clip_push", "clip_pop", "screen_width", "screen_height",
         "window_open", "window_close", "window_should_close", "frame_begin", "frame_end", "frame_steps",
         "frame_capture", "key_down", "key_pressed", "key_repeat", "char_pressed", "mouse_x", "mouse_y",
-        "mouse_down", "mouse_wheel", "had_input", "set_event_waiting", "clipboard_get", "clipboard_set",
+        "mouse_down", "mouse_right_down", "mouse_wheel", "had_input", "set_event_waiting",
+        "clipboard_get", "clipboard_set", "dropped_files",
         "tape_open", "tape_close", "tape_mark",
         "assert", "clock", "len", "try_recv", "wrapping_add", "wrapping_sub", "wrapping_mul",
         "int", "float", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]

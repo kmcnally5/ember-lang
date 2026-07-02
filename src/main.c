@@ -8,6 +8,7 @@
 #include "cgen_c.h"
 #include "chunk.h"
 #include "program.h"
+#include "bytecode_io.h"
 #include "vm.h"
 #include "prove.h"
 #include "docgen.h"
@@ -465,6 +466,24 @@ static int emit_bytecode(const TokenList *tokens, const char *name) {
 
 
 
+// emit_bytecode_bin compiles and serializes the program to a runnable `.emb` container at `out_path`
+// (docs/design/bytecode-container.md). Unlike --emit=bytecode (a human-readable disassembly), this is the
+// exact CompiledProgram, loadable by `--run-bytecode`. Returns 1 on a compile or write error.
+static int emit_bytecode_bin(const TokenList *tokens, const char *name, const char *out_path) {
+    CompiledProgram prog;
+    compiled_program_init(&prog);
+    int error = compile_program(tokens, name, &prog);
+    if (!error && bytecode_write(&prog, out_path) != 0) {
+        fprintf(stderr, "emberc: could not write bytecode to '%s'\n", out_path);
+        error = 1;
+    }
+    compiled_program_free(&prog);
+    return error;
+}
+
+
+
+
 
 // (OFI-111b) Fault value rendering uses the recursive walker render_value_into (src/vm.c), which
 // renders a struct/enum/array payload as data (e.g. Err("io"), MyErr { code: 5 }) instead of <obj>.
@@ -560,6 +579,51 @@ static int emit_run(const TokenList *tokens, const char *name) {
     }
     compiled_program_free(&prog);
     return error;
+}
+
+
+
+
+// run_bytecode loads a serialized `.emb` container (docs/design/bytecode-container.md) and executes it,
+// exactly as emit_run does after compiling — the same exit-code and unhandled-Err/None handling — but with
+// no front end: the program is deserialized, not compiled. Returns the process exit code (0 / 65 / 66).
+static int run_bytecode(const char *path) {
+    CompiledProgram prog;
+    compiled_program_init(&prog);
+    if (bytecode_read(path, &prog) != 0) {
+        fprintf(stderr, "emberc: could not load bytecode '%s' (unreadable, malformed, or a VM-ABI mismatch)\n",
+                path);
+        compiled_program_free(&prog);
+        return 66;
+    }
+    VM   *vm     = vm_create(&prog);
+    Value result = INT_VAL(0);
+    int   rc     = 0;
+    if (vm_run(vm, &result, NULL) == VM_OK) {
+        int code;
+        if (vm_exited(vm, &code)) {
+            vm_destroy(vm);
+            compiled_program_free(&prog);
+            fflush(stdout);
+            exit(code);
+        }
+        if (report_unhandled_error(path, &prog, vm, result)) {
+            rc = 65;   // an unhandled Err/None reached main → Fault on stderr, non-zero exit
+        } else if (IS_INT(result)) {
+            printf("=> %lld\n", (long long)AS_INT(result));
+        } else if (IS_FLOAT(result)) {
+            printf("=> %g\n", AS_FLOAT(result));
+        } else if (IS_STRING(result)) {
+            printf("=> %s\n", AS_CSTRING(result));
+        } else {
+            printf("=> <obj>\n");
+        }
+    } else {
+        rc = 65;
+    }
+    vm_destroy(vm);
+    compiled_program_free(&prog);
+    return rc;
 }
 
 
@@ -922,6 +986,19 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--doctor") == 0) {
             return run_doctor(argv[0]);
         }
+        if (strcmp(argv[i], "--run-bytecode") == 0) {
+            // Load and run a serialized `.emb` container (no source, no front end). Everything after the
+            // .emb path is the Ember program's args(), mirroring `emberc --emit=run app.em foo bar`.
+            if (i + 1 >= argc) {
+                fprintf(stderr, "emberc: --run-bytecode requires a <file.emb>\n");
+                return 64;
+            }
+            const char *bc_path = argv[i + 1];
+            vm_set_program_args((i + 2 < argc) ? argc - (i + 2) : 0,
+                                (i + 2 < argc) ? &argv[i + 2] : NULL);
+            vm_set_source_path(bc_path);
+            return run_bytecode(bc_path);
+        }
         if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
             printf("emberc %s\n", EMBER_VERSION);
             return 0;
@@ -932,6 +1009,8 @@ int main(int argc, char **argv) {
                 "usage:\n"
                 "  emberc <file.em>                inspect/compile a source file (default --emit=tokens)\n"
                 "  emberc --emit=<mode> <file.em>  mode: run|ast|bytecode|c|docs|prove|check|replay|trace|tokens\n"
+                "  emberc --emit=bytecode-bin -o <f.emb> <file.em>  serialize a runnable bytecode container\n"
+                "  emberc --run-bytecode <file.emb>  load and run a serialized .emb container\n"
                 "  emberc -o <bin> <file.em>       compile to a native binary (C backend)\n"
                 "  emberc --tape <file.em>         record the execution tape (alias for --emit=trace)\n"
                 "  emberc --lsp                    run the language server (JSON-RPC over stdio)\n"
@@ -1028,7 +1107,17 @@ int main(int argc, char **argv) {
     TokenList tokens = lexer_scan(source, path);
 
     int rc;
-    if (out_path != NULL) {
+    if (strcmp(emit, "bytecode-bin") == 0) {
+        // Serialize a runnable `.emb` container (docs/design/bytecode-container.md). Takes precedence over
+        // the bare `-o` native-binary path, which `-o` would otherwise trigger.
+        if (out_path == NULL) {
+            fprintf(stderr, "emberc: --emit=bytecode-bin requires -o <file.emb>\n");
+            rc = 64;
+        } else {
+            int error = emit_bytecode_bin(&tokens, path, out_path);
+            rc = (tokens.had_error || error) ? 65 : 0;
+        }
+    } else if (out_path != NULL) {
         // Native backend: `emberc -o <bin> file.em` compiles to a standalone binary,
         // regardless of any --emit mode given.
         int error = compile_native(&tokens, path, out_path, argv[0]);

@@ -437,5 +437,57 @@ if [ -f "$CCSRC" ]; then
     [ -n "$ccbin" ] && rm -f "$ccbin"
 fi
 
+# ---- Stage 7: the runnable bytecode container (.emb) ------------------------------------------------
+# docs/design/bytecode-container.md — Phase 1 of the standalone-toolchain campaign. `--emit=bytecode-bin`
+# serializes a program to a `.emb` container (the exact CompiledProgram); `--run-bytecode` loads and runs
+# it. A container's stdout AND exit code must be byte-identical to `--emit=run` on the source — proof the
+# emitted bytecode is genuinely RUNNABLE, not just a disassembly. Runs on the VM + C loader (no cc). The
+# flagship cases round-trip the self-hosted compiler ITSELF (multi-module, driven by a file argument).
+# stdin is /dev/null so a read_line() program cannot block the gate.
+BCEMB="${TMPDIR:-/tmp}/emberc_selfhost_bc_$$.emb"
+bcpass=0
+bcfail=0
+# rt_case <source.em> [program args…] — round-trip one program, comparing --run-bytecode to --emit=run.
+rt_case() {
+    src=$1
+    shift
+    if ! (cd "$ROOT" && "$BIN" --emit=bytecode-bin -o "$BCEMB" "$src" >/dev/null 2>&1); then
+        echo "FAIL    bytecode container: $src did not compile to a .emb"
+        bcfail=$((bcfail + 1))
+        return
+    fi
+    rout=$(cd "$ROOT" && "$BIN" --emit=run "$src" "$@" </dev/null 2>/dev/null); rrc=$?
+    bout=$(cd "$ROOT" && "$BIN" --run-bytecode "$BCEMB" "$@" </dev/null 2>/dev/null); brc=$?
+    if [ "$rout" = "$bout" ] && [ "$rrc" = "$brc" ]; then
+        bcpass=$((bcpass + 1))
+    else
+        echo "FAIL    .emb round-trip differs from --emit=run on $src $* (run rc=$rrc, .emb rc=$brc)"
+        bcfail=$((bcfail + 1))
+    fi
+}
+# Representative language coverage: recursive ASTs/enums/match, symbol tables, structs, generics,
+# contracts, interfaces, and the from_bytes serializer primitive.
+rt_case tests/selfhost/calc.em
+rt_case tests/selfhost/symtab.em
+rt_case tests/selfhost/recursion_scale.em
+rt_case tests/selfhost/file_io.em
+rt_case tests/native/from_bytes.em
+rt_case tests/native/struct_nested.em
+rt_case examples/04_generics.em
+rt_case examples/07_contracts.em
+rt_case examples/13_interfaces.em
+# The flagship: the self-hosted compiler drivers, run over a real module (multi-module program + args).
+rt_case selfhost/lex_dump.em selfhost/lexer.em
+rt_case selfhost/parse_dump.em selfhost/lexer.em
+rt_case selfhost/emberc.em selfhost/lexer.em
+rm -f "$BCEMB"
+if [ "$bcfail" -eq 0 ]; then
+    echo "selfhost bytecode: $bcpass/$bcpass .emb containers run byte-identical to --emit=run (incl. the self-hosted compiler itself)"
+else
+    echo "selfhost bytecode: $bcpass/$((bcpass + bcfail)) .emb round-trips byte-identical ($bcfail FAILED)"
+fi
+pass=$((pass + bcpass))
+fail=$((fail + bcfail))
+
 echo "selfhost: passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

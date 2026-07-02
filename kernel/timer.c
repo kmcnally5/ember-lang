@@ -52,9 +52,14 @@ void timer_init(void) {
     *GICC_PMR         = 0xFF;                   // allow all priorities through the CPU interface
     *GICC_CTLR        = 1;                       // enable the CPU interface
 
-    g_interval = timer_freq() / 10;             // ~100 ms per tick
+    uint64_t freq = timer_freq();
+    if (freq == 0) {                             // firmware left CNTFRQ unset (never on QEMU virt);
+        freq = 62500000;                         // fall back to QEMU virt's 62.5 MHz rather than /0
+    }
+    g_interval = freq / 10;                      // ~100 ms per tick
     timer_set_tval(g_interval);
     timer_set_ctl(1);                            // ENABLE=1, IMASK=0
+    __asm__ volatile("isb");                     // synchronise the timer config before unmasking
 
     __asm__ volatile("msr daifclr, #2");         // unmask IRQs (clear PSTATE.I)
 }
@@ -68,8 +73,14 @@ void em_irq(void) {
     uint32_t intid = iar & 0x3FFu;
     if (intid == TIMER_INTID) {
         g_ticks++;
-        timer_set_tval(g_interval);              // re-arm for the next tick
+        timer_set_tval(g_interval);              // re-arm: this DEASSERTS the level-triggered timer
+                                                 // line (ISTATUS clears when TVAL>0), so it must come
+                                                 // BEFORE EOIR — EOIR with the line still asserted
+                                                 // would immediately re-pend (an interrupt storm).
     }
+    // Complete the tick store + the timer re-arm before signalling end-of-interrupt, so the deassert
+    // is observed by the GIC first (a DSB matters on a real out-of-order core; a no-op on QEMU TCG).
+    __asm__ volatile("dsb sy" ::: "memory");
     *GICC_EOIR = iar;                            // end of interrupt
 }
 
